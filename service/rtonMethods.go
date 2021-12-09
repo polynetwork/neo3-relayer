@@ -9,8 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/btcsuite/btcd/btcec"
-	helper2 "github.com/joeqian10/neo-gogogo/helper"
-	models2 "github.com/joeqian10/neo-gogogo/rpc/models"
 	"github.com/joeqian10/neo3-gogogo/crypto"
 	"github.com/joeqian10/neo3-gogogo/helper"
 	"github.com/joeqian10/neo3-gogogo/rpc/models"
@@ -20,6 +18,8 @@ import (
 	"github.com/ontio/ontology-crypto/keypair"
 	"github.com/ontio/ontology-crypto/signature"
 	"github.com/ontio/ontology-crypto/sm2"
+	"github.com/polynetwork/bridge-common/chains/bridge"
+	"github.com/polynetwork/bridge-common/util"
 	"github.com/polynetwork/neo3-relayer/db"
 	"github.com/polynetwork/poly/common"
 	"github.com/polynetwork/poly/core/types"
@@ -305,11 +305,13 @@ func (this *SyncService) syncProofToNeo(key string, txHeight, lastSynced uint32)
 		return fmt.Errorf("[syncProofToNeo] DeserializeMerkleValue error: %s", err)
 	}
 
+	polyHash := helper.BytesToHex(util.Reverse(toMerkleValue.TxHash))
+	srcHash := helper.BytesToHex(toMerkleValue.TxParam.TxHash)
 	Log.Infof("fromChainId: " + strconv.Itoa(int(toMerkleValue.FromChainID)))
-	Log.Infof("polyTxHash: " + helper.BytesToHex(toMerkleValue.TxHash))
+	Log.Infof("polyTxHash: " + polyHash)
 	Log.Infof("fromContract: " + helper.BytesToHex(toMerkleValue.TxParam.FromContract))
 	Log.Infof("toChainId: " + strconv.Itoa(int(toMerkleValue.TxParam.ToChainID)))
-	Log.Infof("sourceTxHash: " + helper.BytesToHex(toMerkleValue.TxParam.TxHash))
+	Log.Infof("sourceTxHash: " + srcHash)
 	Log.Infof("toContract: " + helper.BytesToHex(toMerkleValue.TxParam.ToContract))
 	Log.Infof("method: " + helper.BytesToHex(toMerkleValue.TxParam.Method))
 	Log.Infof("TxParamArgs: " + helper.BytesToHex(toMerkleValue.TxParam.Args))
@@ -320,6 +322,35 @@ func (this *SyncService) syncProofToNeo(key string, txHeight, lastSynced uint32)
 	Log.Infof("toAssetHash: " + helper.BytesToHex(toAssetHash))
 	Log.Infof("toAddress: " + helper.BytesToHex(toAddress))
 	Log.Infof("amount: " + amount.String())
+
+	retry := &db.Retry{
+		Height: txHeight,
+		Key:    key,
+	}
+	sink := common.NewZeroCopySink(nil)
+	retry.Serialization(sink)
+	v := sink.Bytes()
+
+	check, err := CheckFee(this.bridge, toMerkleValue.FromChainID, srcHash, polyHash)
+	hasPaid := false
+	if check.Pass() {
+		hasPaid = true
+		Log.Infof("CheckFee polyHash %s has paid.", polyHash)
+	} else if check.Missing() {
+		Log.Warnf("CheckFee polyHash %s missing in bridge", polyHash)
+	} else if check.Skip() {
+		Log.Warnf("Skipping poly for marked as not target in fee check. polyHash: %s", polyHash)
+		return nil
+	}
+
+	if !hasPaid {
+		Log.Infof("CheckFee polyHash %s not paid, put it into retry.", polyHash)
+		err = this.db.PutNeoRetry(v)
+		if err != nil {
+			return fmt.Errorf("[syncProofToNeo] this.db.PutNeoRetry error: %s", err)
+		}
+		return nil
+	}
 
 	//// check if source hash app log includes wrapper contract
 	//sourceTxHash := helper.UInt256FromBytes(toMerkleValue.TxParam.TxHash)
@@ -363,13 +394,13 @@ func (this *SyncService) syncProofToNeo(key string, txHeight, lastSynced uint32)
 		return fmt.Errorf("[syncProofToNeo] WalletHelper.GetAccountAndBalance error: %s", err)
 	}
 
-	retry := &db.Retry{
-		Height: txHeight,
-		Key:    key,
-	}
-	sink := common.NewZeroCopySink(nil)
-	retry.Serialization(sink)
-	v := sink.Bytes()
+	//retry := &db.Retry{
+	//	Height: txHeight,
+	//	Key:    key,
+	//}
+	//sink := common.NewZeroCopySink(nil)
+	//retry.Serialization(sink)
+	//v := sink.Bytes()
 
 	trx, err := this.nwh.MakeTransaction(script, nil, []tx.ITransactionAttribute{}, balancesGas)
 	if err != nil {
@@ -527,15 +558,34 @@ func (this *SyncService) retrySyncProofToNeo(v []byte, lastSynced uint32) error 
 		return fmt.Errorf("[retrySyncProofToNeo] DeserializeMerkleValue error: %s", err)
 	}
 
-	// check if source hash app log includes wrapper contract
-	sourceTxHash := helper.UInt256FromBytes(toMerkleValue.TxParam.TxHash)
-	txId := sourceTxHash.String()
-	res := this.neo2Sdk.GetApplicationLog(txId)
-	if res.HasError() {
-		return fmt.Errorf("[retrySyncProofToNeo] this.neo2Sdk.GetApplicationLog error: %s", res.GetErrorInfo())
+	polyHash := helper.BytesToHex(util.Reverse(toMerkleValue.TxHash))
+	srcHash := helper.BytesToHex(toMerkleValue.TxParam.TxHash)
+	Log.Infof("fromChainId: " + strconv.Itoa(int(toMerkleValue.FromChainID)))
+	Log.Infof("polyTxHash: " + polyHash)
+	Log.Infof("fromContract: " + helper.BytesToHex(toMerkleValue.TxParam.FromContract))
+	Log.Infof("toChainId: " + strconv.Itoa(int(toMerkleValue.TxParam.ToChainID)))
+	Log.Infof("sourceTxHash: " + srcHash)
+	Log.Infof("toContract: " + helper.BytesToHex(toMerkleValue.TxParam.ToContract))
+	Log.Infof("method: " + helper.BytesToHex(toMerkleValue.TxParam.Method))
+	Log.Infof("TxParamArgs: " + helper.BytesToHex(toMerkleValue.TxParam.Args))
+
+	check, err := CheckFee(this.bridge, toMerkleValue.FromChainID, srcHash, polyHash)
+	hasPaid := false
+	if check.Pass() {
+		hasPaid = true
+		Log.Infof("CheckFee polyHash %s has paid.", polyHash)
+	} else if check.Missing() {
+		Log.Warnf("CheckFee polyHash %s missing in bridge", polyHash)
+	} else if check.Skip() {
+		Log.Warnf("Skipping poly for marked as not target in fee check. polyHash: %s", polyHash)
+		err := this.db.DeleteNeoRetry(v)
+		if err != nil {
+			return fmt.Errorf("[retrySyncProofToNeo] this.db.DeleteNeoRetry error: %s", err)
+		}
+		return nil
 	}
-	if !this.checkIsNeo2Wrapper(res.Result) {
-		Log.Infof("[retrySyncProofToNeo] this tx 0x%s is not from neo2 wrapper", txId)
+
+	if !hasPaid {
 		return nil
 	}
 
@@ -593,6 +643,24 @@ func (this *SyncService) retrySyncProofToNeo(v []byte, lastSynced uint32) error 
 		return fmt.Errorf("[retrySyncProofToNeo] this.db.DeleteNeoRetry error: %s", err)
 	}
 	return nil
+}
+
+func CheckFee(sdk *bridge.SDK, srcChainId uint64, srcHash, polyHash string) (res *bridge.CheckFeeRequest, err error) {
+	state := map[string]*bridge.CheckFeeRequest{}
+	state[polyHash] = &bridge.CheckFeeRequest{
+		ChainId:  srcChainId,
+		TxId:     srcHash,
+		PolyHash: polyHash,
+	}
+	err = sdk.Node().CheckFee(state)
+	if err != nil {
+		return
+	}
+	if state[polyHash] == nil {
+		state[polyHash] = new(bridge.CheckFeeRequest)
+	}
+	Log.Infof("CheckFee result: %+v", *state[polyHash])
+	return state[polyHash], nil
 }
 
 func (this *SyncService) neoCheckTx() error {
@@ -751,23 +819,6 @@ func (this *SyncService) sortSignatures(sigs [][]byte, hash []byte) ([]byte, err
 		return nil, fmt.Errorf("[sortSignatures] getCurrentPolyBookKeeps error: %s", err)
 	}
 	return sortSignatures(this.relayPubKeys, sigs, hash)
-}
-
-func (this *SyncService) checkIsNeo2Wrapper(applicationLog models2.RpcApplicationLog) bool {
-	for _, execution := range applicationLog.Executions {
-		if execution.VMState == "FAULT" {
-			return false
-		}
-		notifications := execution.Notifications
-		for _, notification := range notifications {
-			u, _ := helper2.UInt160FromString(notification.Contract)
-			s := "0x" + u.String()
-			if s == this.config.Neo2Wrapper {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func sortSignatures(pubKeys, sigs [][]byte, hash []byte) ([]byte, error) {

@@ -13,8 +13,6 @@
   "RetryInterval": 5,
   "DBPath": "boltdb",
   "ChangeBookkeeper": true,
-  "Neo2RpcUrl": "http://seed1.ngd.network:20332",
-  "Neo2Wrapper": "0x7997ac991b66ca3810602639a2f2c1bd985e8b5a",
   "PolyStartHeight": 14828239,
   "NeoStartHeight": 317775
 }
