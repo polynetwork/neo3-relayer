@@ -28,8 +28,6 @@ type Config struct {
 	RetryInterval     uint64
 	DBPath            string
 	ChangeBookkeeper  bool
-	Neo2RpcUrl        string
-	Neo2Wrapper       string
 	PolyStartHeight   uint32
 	NeoStartHeight    uint32
 }

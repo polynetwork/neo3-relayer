@@ -9,8 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/btcsuite/btcd/btcec"
-	helper2 "github.com/joeqian10/neo-gogogo/helper"
-	models2 "github.com/joeqian10/neo-gogogo/rpc/models"
 	"github.com/joeqian10/neo3-gogogo/crypto"
 	"github.com/joeqian10/neo3-gogogo/helper"
 	"github.com/joeqian10/neo3-gogogo/rpc/models"
@@ -23,7 +21,6 @@ import (
 	"github.com/polynetwork/neo3-relayer/db"
 	"github.com/polynetwork/poly/common"
 	"github.com/polynetwork/poly/core/types"
-	"strconv"
 	"strings"
 	"time"
 
@@ -305,21 +302,21 @@ func (this *SyncService) syncProofToNeo(key string, txHeight, lastSynced uint32)
 		return fmt.Errorf("[syncProofToNeo] DeserializeMerkleValue error: %s", err)
 	}
 
-	Log.Infof("fromChainId: " + strconv.Itoa(int(toMerkleValue.FromChainID)))
-	Log.Infof("polyTxHash: " + helper.BytesToHex(toMerkleValue.TxHash))
-	Log.Infof("fromContract: " + helper.BytesToHex(toMerkleValue.TxParam.FromContract))
-	Log.Infof("toChainId: " + strconv.Itoa(int(toMerkleValue.TxParam.ToChainID)))
-	Log.Infof("sourceTxHash: " + helper.BytesToHex(toMerkleValue.TxParam.TxHash))
-	Log.Infof("toContract: " + helper.BytesToHex(toMerkleValue.TxParam.ToContract))
-	Log.Infof("method: " + helper.BytesToHex(toMerkleValue.TxParam.Method))
-	Log.Infof("TxParamArgs: " + helper.BytesToHex(toMerkleValue.TxParam.Args))
-	toAssetHash, toAddress, amount, err := DeserializeArgs(toMerkleValue.TxParam.Args)
-	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] DeserializeArgs error: %s", err)
-	}
-	Log.Infof("toAssetHash: " + helper.BytesToHex(toAssetHash))
-	Log.Infof("toAddress: " + helper.BytesToHex(toAddress))
-	Log.Infof("amount: " + amount.String())
+	//Log.Infof("fromChainId: " + strconv.Itoa(int(toMerkleValue.FromChainID)))
+	//Log.Infof("polyTxHash: " + helper.BytesToHex(toMerkleValue.TxHash))
+	//Log.Infof("fromContract: " + helper.BytesToHex(toMerkleValue.TxParam.FromContract))
+	//Log.Infof("toChainId: " + strconv.Itoa(int(toMerkleValue.TxParam.ToChainID)))
+	//Log.Infof("sourceTxHash: " + helper.BytesToHex(toMerkleValue.TxParam.TxHash))
+	//Log.Infof("toContract: " + helper.BytesToHex(toMerkleValue.TxParam.ToContract))
+	//Log.Infof("method: " + helper.BytesToHex(toMerkleValue.TxParam.Method))
+	//Log.Infof("TxParamArgs: " + helper.BytesToHex(toMerkleValue.TxParam.Args))
+	//toAssetHash, toAddress, amount, err := DeserializeArgs(toMerkleValue.TxParam.Args)
+	//if err != nil {
+	//	return fmt.Errorf("[syncProofToNeo] DeserializeArgs error: %s", err)
+	//}
+	//Log.Infof("toAssetHash: " + helper.BytesToHex(toAssetHash))
+	//Log.Infof("toAddress: " + helper.BytesToHex(toAddress))
+	//Log.Infof("amount: " + amount.String())
 
 	//// check if source hash app log includes wrapper contract
 	//sourceTxHash := helper.UInt256FromBytes(toMerkleValue.TxParam.TxHash)
@@ -527,16 +524,9 @@ func (this *SyncService) retrySyncProofToNeo(v []byte, lastSynced uint32) error 
 		return fmt.Errorf("[retrySyncProofToNeo] DeserializeMerkleValue error: %s", err)
 	}
 
-	// check if source hash app log includes wrapper contract
-	sourceTxHash := helper.UInt256FromBytes(toMerkleValue.TxParam.TxHash)
-	txId := sourceTxHash.String()
-	res := this.neo2Sdk.GetApplicationLog(txId)
-	if res.HasError() {
-		return fmt.Errorf("[retrySyncProofToNeo] this.neo2Sdk.GetApplicationLog error: %s", res.GetErrorInfo())
-	}
-	if !this.checkIsNeo2Wrapper(res.Result) {
-		Log.Infof("[retrySyncProofToNeo] this tx 0x%s is not from neo2 wrapper", txId)
-		return nil
+	// limit the method to "unlock"
+	if helper.BytesToHex(toMerkleValue.TxParam.Method) != "756e6c6f636b" { // unlock
+		return fmt.Errorf("[syncProofToNeo] called method is invalid, height %d, key %s", txHeight, key)
 	}
 
 	// build script
@@ -753,22 +743,22 @@ func (this *SyncService) sortSignatures(sigs [][]byte, hash []byte) ([]byte, err
 	return sortSignatures(this.relayPubKeys, sigs, hash)
 }
 
-func (this *SyncService) checkIsNeo2Wrapper(applicationLog models2.RpcApplicationLog) bool {
-	for _, execution := range applicationLog.Executions {
-		if execution.VMState == "FAULT" {
-			return false
-		}
-		notifications := execution.Notifications
-		for _, notification := range notifications {
-			u, _ := helper2.UInt160FromString(notification.Contract)
-			s := "0x" + u.String()
-			if s == this.config.Neo2Wrapper {
-				return true
-			}
-		}
-	}
-	return false
-}
+//func (this *SyncService) checkIsNeo2Wrapper(applicationLog models2.RpcApplicationLog) bool {
+//	for _, execution := range applicationLog.Executions {
+//		if execution.VMState == "FAULT" {
+//			return false
+//		}
+//		notifications := execution.Notifications
+//		for _, notification := range notifications {
+//			u, _ := helper2.UInt160FromString(notification.Contract)
+//			s := "0x" + u.String()
+//			if s == this.config.Neo2Wrapper {
+//				return true
+//			}
+//		}
+//	}
+//	return false
+//}
 
 func sortSignatures(pubKeys, sigs [][]byte, hash []byte) ([]byte, error) {
 	// sig length should >= 2/3 * len(pubKeys) + 1

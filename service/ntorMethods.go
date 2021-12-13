@@ -1,7 +1,6 @@
 package service
 
 import (
-	"encoding/hex"
 	"fmt"
 	"github.com/joeqian10/neo3-gogogo/block"
 	"github.com/joeqian10/neo3-gogogo/crypto"
@@ -202,11 +201,11 @@ func (this *SyncService) retrySyncProofToRelay(v []byte) error {
 	crossChainMsg := buff.Bytes()
 
 	// get proof
-	res3 := this.neoSdk.GetProof(stateRoot.RootHash, "0x"+helper.ReverseString(this.config.NeoCCMC), retry.Key)
+	res3 := this.neoSdk.GetProof(stateRoot.RootHash, this.config.NeoCCMC, crypto.Base64Encode(helper.HexToBytes(retry.Key)))
 	if res3.HasError() {
 		return fmt.Errorf("[retrySyncProofToRelay] neoSdk.GetProof error: %s", res3.Error.Message)
 	}
-	proof, err := hex.DecodeString(res3.Result)
+	proof, err := crypto.Base64Decode(res3.Result)
 	if err != nil {
 		return fmt.Errorf("[retrySyncProofToRelay] decode proof error: %s", err)
 	}

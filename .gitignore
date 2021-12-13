@@ -8,7 +8,8 @@ boltdb/*
 Logs/*
 backups/*
 
-./neo3_relayer_mainnet.json
-./poly.dat
-./main
-./setup.txt
+neo3_relayer_mainnet.json
+poly.dat
+main
+setup.txt
+neo3_event.json
