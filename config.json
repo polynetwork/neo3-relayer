@@ -13,6 +13,6 @@
   "RetryInterval": 5,
   "DBPath": "boltdb",
   "ChangeBookkeeper": true,
-  "PolyStartHeight": 0,
+  "PolyStartHeight": 14780176,
   "NeoStartHeight": 48950
 }

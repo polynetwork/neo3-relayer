@@ -395,7 +395,7 @@ func (this *SyncService) syncProofToNeo(key string, txHeight, lastSynced uint32)
 		return fmt.Errorf("[syncProofToNeo] SendRawTransaction error: %s, "+
 			"tx height: %d, "+
 			"key hex string: %s, "+
-			"block height reliable: %d"+
+			"block height reliable: %d, "+
 			"script hex string: %s, "+
 			"raw tx string: %s",
 			response.ErrorResponse.Error.Message,
