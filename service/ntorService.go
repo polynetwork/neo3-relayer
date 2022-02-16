@@ -66,11 +66,11 @@ func (this *SyncService) neoToRelay(m, n uint32) error {
 		Log.Infof("[neoToRelay] start processing NEO block %d", this.relaySyncHeight)
 		// request block from NEO, try rpc request 5 times, if failed, continue
 		for j := 0; j < 5; j++ {
-			response := this.neoSdk.GetBlock(strconv.Itoa(int(i)))
-			if response.HasError() {
-				return fmt.Errorf("[neoToRelay] neoSdk.GetBlockByIndex error: %s", response.Error.Message)
+			blockResponse := this.neoSdk.GetBlock(strconv.Itoa(int(i)))
+			if blockResponse.HasError() {
+				return fmt.Errorf("[neoToRelay] neoSdk.GetBlockByIndex error: %s", blockResponse.GetErrorInfo())
 			}
-			blk := response.Result
+			blk := blockResponse.Result
 			if blk.Hash == "" {
 				if j == 4 {
 					Log.Errorf("[neoToRelay] rpc request failed 5 times")
@@ -86,7 +86,7 @@ func (this *SyncService) neoToRelay(m, n uint32) error {
 				// check tx script is useless since which contract calling ccmc is not sure
 				response := this.neoSdk.GetApplicationLog(tx.Hash)
 				if response.HasError() {
-					return fmt.Errorf("[neoToRelay] neoSdk.GetApplicationLog error: %s", response.Error.Message)
+					return fmt.Errorf("[neoToRelay] neoSdk.GetApplicationLog error: %s", response.GetErrorInfo())
 				}
 
 				for _, execution := range response.Result.Executions {

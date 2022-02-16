@@ -1,12 +1,9 @@
-.vscode/launch.json
-.idea/Relayer.iml
-.idea/misc.xml
-.idea/modules.xml
-.idea/vcs.xml
+.vscode/
+.idea/
 
-boltdb/*
-Logs/*
-backups/*
+boltdb/
+Logs/
+backups/
 
 neo3_relayer_mainnet.json
 poly.dat
