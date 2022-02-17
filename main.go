@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/polynetwork/neo3-relayer/cmd"
-	"github.com/polynetwork/neo3-relayer/common"
 	"github.com/polynetwork/neo3-relayer/config"
 	"github.com/polynetwork/neo3-relayer/log"
 	"github.com/polynetwork/neo3-relayer/service"
@@ -60,31 +59,23 @@ func startSync(ctx *cli.Context) {
 	}
 
 	neoPwd := ctx.GlobalString(cmd.GetFlagName(cmd.NeoPwd))
-	relayPwd := ctx.GlobalString(cmd.GetFlagName(cmd.RelayPwd))
 
-	//create Relay Chain RPC Client
-	relaySdk := relaySdk.NewPolySdk()
-	err = SetUpPoly(relaySdk, config.DefConfig.RelayJsonRpcUrl)
+	//create poly rpc client
+	polySdk := relaySdk.NewPolySdk()
+	err = SetUpPoly(polySdk, config.DefConfig.PolyConfig.RpcUrl)
 	if err != nil {
 		panic(fmt.Errorf("failed to set up poly: %v", err))
 	}
 
-	// Get wallet account from Relay Chain
-	account, ok := common.GetAccountByPassword(relaySdk, config.DefConfig.WalletFile, relayPwd)
-	if !ok {
-		Log.Errorf("[NEO Relayer] common.GetAccountByPassword error")
-		return
-	}
-
 	// create a NEO RPC client
-	neoRpcClient := rpc.NewClient(config.DefConfig.NeoJsonRpcUrl)
+	neoRpcClient := rpc.NewClient(config.DefConfig.NeoConfig.RpcUrl)
 
 	// open the NEO wallet
 	ps := helper.ProtocolSettings{
-		Magic:          config.DefConfig.NeoMagic,
+		Magic:          config.DefConfig.NeoConfig.NeoMagic,
 		AddressVersion: helper.DefaultAddressVersion,
 	}
-	w, err := wallet.NewNEP6Wallet(config.DefConfig.NeoWalletFile, &ps, nil, nil)
+	w, err := wallet.NewNEP6Wallet(config.DefConfig.NeoConfig.WalletFile, &ps, nil, nil)
 	if err != nil {
 		Log.Errorf("[NEO Relayer] Failed to open NEO wallet: %s", err)
 		return
@@ -108,7 +99,7 @@ func startSync(ctx *cli.Context) {
 	wh := wallet.NewWalletHelperFromWallet(neoRpcClient, w)
 
 	//Start syncing
-	syncService := service.NewSyncService(account, relaySdk, wh, neoRpcClient)
+	syncService := service.NewSyncService(polySdk, wh, neoRpcClient)
 	syncService.Run()
 
 	waitToExit()

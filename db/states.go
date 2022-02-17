@@ -6,13 +6,17 @@ import (
 )
 
 type Retry struct {
-	Height uint32
-	Key    string
+	Height  uint32
+	TxHash  string
+	Id      []byte
+	Subject []byte
 }
 
 func (this *Retry) Serialization(sink *common.ZeroCopySink) {
 	sink.WriteUint32(this.Height)
-	sink.WriteString(this.Key)
+	sink.WriteString(this.TxHash)
+	sink.WriteVarBytes(this.Id)
+	sink.WriteVarBytes(this.Subject)
 }
 
 func (this *Retry) Deserialization(source *common.ZeroCopySource) error {
@@ -20,38 +24,23 @@ func (this *Retry) Deserialization(source *common.ZeroCopySource) error {
 	if eof {
 		return fmt.Errorf("waiting deserialize height error")
 	}
-	key, eof := source.NextString()
+	txHash, eof := source.NextString()
 	if eof {
-		return fmt.Errorf("waiting deserialize key error")
+		return fmt.Errorf("waiting deserialize txHash error")
+	}
+	id, eof := source.NextVarBytes()
+	if eof {
+		return fmt.Errorf("waiting deserialize id error")
+	}
+	subject, eof := source.NextVarBytes()
+	if eof {
+		return fmt.Errorf("waiting deserialize subject error")
 	}
 
 	this.Height = height
-	this.Key = key
-	return nil
-}
+	this.TxHash = txHash
+	this.Id = id
+	this.Subject = subject
 
-type NeoUtxo struct {
-	TxId string
-	Index int
-}
-
-func (this *NeoUtxo) Serialization(sink *common.ZeroCopySink)  {
-	sink.WriteString(this.TxId)
-	sink.WriteInt32(int32(this.Index))
-}
-
-func (this *NeoUtxo) Deserialization(source *common.ZeroCopySource) error {
-	txId, eof := source.NextString()
-	if eof {
-		return fmt.Errorf("waiting deserialize txid error")
-	}
-
-	index, eof := source.NextInt32()
-	if eof {
-		return fmt.Errorf("waiting deserialize index error")
-	}
-
-	this.TxId = txId
-	this.Index = int(index)
 	return nil
 }

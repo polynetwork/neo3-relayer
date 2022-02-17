@@ -1,17 +1,23 @@
 {
-  "RelayJsonRpcUrl": "http://138.91.6.226:40336",
-  "RelayChainID": 0,
-  "WalletFile": "./poly_test.dat",
-  "NeoMagic": 6543221,
-  "NeoWalletFile": "./neo3_dev.json",
-  "NeoJsonRpcUrl": "http://seed1t.neo.org:21332",
-  "NeoChainID": 220,
-  "NeoCCMC": "0x7c842f3900ceba5bcdeeeec05c9b41ba63ad6cd2",
-  "SpecificContract": "",
-  "ScanInterval": 2,
-  "RetryInterval": 2,
-  "DBPath": "boltdb",
-  "ChangeBookkeeper": true,
-  "PolyStartHeight": 1196919,
-  "NeoStartHeight": 67140
+  "PolyConfig": {
+    "RpcUrl": "http://138.91.6.226:40336",
+    "ChangeBookkeeper": true
+  },
+  "NeoConfig": {
+    "SideChainID": 220,
+    "NeoMagic": 6543221,
+    "WalletFile": "./neo3_dev.json",
+    "RpcUrl": "http://seed1t.neo.org:21332",
+    "CCMC": "0x7c842f3900ceba5bcdeeeec05c9b41ba63ad6cd2",
+    "P2NContract": "",
+    "AllowedMethods": [
+      "unlock"
+    ]
+  },
+  "ForceConfig": {
+    "PolyStartHeight": 14780176
+  },
+  "ScanInterval": 15,
+  "RetryInterval": 5,
+  "DBPath": "boltdb"
 }

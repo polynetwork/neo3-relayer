@@ -4,19 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 	vconfig "github.com/polynetwork/poly/consensus/vbft/config"
-	autils "github.com/polynetwork/poly/native/service/utils"
+	"github.com/polynetwork/poly/native/service/utils"
 	"time"
 )
 
 // RelayToNeo sync headers from relay chain to neo
 func (this *SyncService) RelayToNeo() {
-	this.neoSyncHeight = this.config.PolyStartHeight
+	this.polyStartHeight = this.config.ForceConfig.PolyStartHeight
 	for {
-		currentRelayChainHeight, err := this.relaySdk.GetCurrentBlockHeight()
+		currentRelayChainHeight, err := this.polySdk.GetCurrentBlockHeight()
 		if err != nil {
 			Log.Errorf("[RelayToNeo] GetCurrentBlockHeight error: ", err)
 		}
-		err = this.relayToNeo(this.neoSyncHeight, currentRelayChainHeight)
+		err = this.relayToNeo(this.polyStartHeight, currentRelayChainHeight)
 		if err != nil {
 			Log.Errorf("[RelayToNeo] relayToNeo error: ", err)
 		}
@@ -26,42 +26,44 @@ func (this *SyncService) RelayToNeo() {
 
 func (this *SyncService) relayToNeo(m, n uint32) error {
 	for i := m; i < n; i++ {
-		Log.Infof("[relayToNeo] start parse block %d", i)
+		Log.Infof("start parse block %d", i)
 
-		block, err := this.relaySdk.GetBlockByHeight(i)
+		block, err := this.polySdk.GetBlockByHeight(i)
 		if err != nil {
-			return fmt.Errorf("[relayToNeo] GetBlockByHeight error: %s", err)
+			return fmt.Errorf("GetBlockByHeight error: %s", err)
 		}
 		txs := block.Transactions
 		for _, tx := range txs {
 			txHash := tx.Hash()
-			event, err := this.relaySdk.GetSmartContractEvent(txHash.ToHexString())
+			event, err := this.polySdk.GetSmartContractEvent(txHash.ToHexString())
 			if err != nil {
-				return fmt.Errorf("[relayToNeo] relaySdk.GetSmartContractEvent error:%s", err)
+				return fmt.Errorf("polySdk.GetSmartContractEvent error: %s, tx: %s", err, txHash.ToHexString())
 			}
 			for _, notify := range event.Notify {
 				states, ok := notify.States.([]interface{})
 				if !ok {
 					continue
 				}
-				if notify.ContractAddress != autils.CrossChainManagerContractAddress.ToHexString() { // relay chain CCMC
+				// todo, SignatureManagerContractAddress
+				if notify.ContractAddress !=  utils.SignatureManagerContractAddress.ToHexString() {
 					continue
 				}
+				// States: []interface{}{"AddSignatureQuorum", id, params.Subject, params.SideChainID},
 				name := states[0].(string)
-				if name == "makeProof" {
-					toChainID := uint64(states[2].(float64))
-					if toChainID == this.config.NeoChainID {
-						key := states[5].(string)
-						// get current neo chain sync height, which is the reliable header height
-						currentNeoChainSyncHeight, err := this.GetCurrentNeoChainSyncHeight()
-						if err != nil {
-							Log.Errorf("[relayToNeo] GetCurrentNeoChainSyncHeight error: ", err)
+				if name == "AddSignatureQuorum" {
+					toChainID := uint64(states[3].(float64))
+					if toChainID == this.config.NeoConfig.SideChainID {
+						id := states[1].([]byte)
+						subject := states[2].([]byte)
+						if len(tx.Sigs) <= 0 {
+							return fmt.Errorf("tx: %s has no sigs", txHash.ToHexString())
 						}
-						err = this.syncProofToNeo(key, i, uint32(currentNeoChainSyncHeight))
+						sigData := tx.Sigs[0].SigData
+						err = this.syncProofToNeo(i, id, subject, sigData)
 						if err != nil {
 							Log.Errorf("--------------------------------------------------")
-							Log.Errorf("[relayToNeo] syncProofToNeo error: %s", err)
-							Log.Errorf("polyHeight: %d, key: %s", i, key)
+							Log.Errorf("syncProofToNeo error: %s", err)
+							Log.Errorf("polyHeight: %d, hash: %s", i, txHash.ToHexString())
 							Log.Errorf("--------------------------------------------------")
 						}
 					}
@@ -69,16 +71,15 @@ func (this *SyncService) relayToNeo(m, n uint32) error {
 			}
 		}
 
-		if this.config.ChangeBookkeeper {
-			// sync key header, change book keeper
+		if this.config.PolyConfig.ChangeBookkeeper {
+			// sync key header, change book keeper,
 			// but should be done after all cross chain tx in this block are handled for verification purpose.
-
 			blkInfo := &vconfig.VbftBlockInfo{}
 			if err := json.Unmarshal(block.Header.ConsensusPayload, blkInfo); err != nil {
 				return fmt.Errorf("[relayToNeo] unmarshal blockInfo error: %s", err)
 			}
 			if blkInfo.NewChainConfig != nil {
-				//this.waitForNeoBlock() // wait for neo block
+				this.waitForNeoBlock() // wait for neo block
 				err = this.changeBookKeeper(block)
 				if err != nil {
 					Log.Errorf("--------------------------------------------------")
@@ -89,7 +90,7 @@ func (this *SyncService) relayToNeo(m, n uint32) error {
 			}
 		}
 
-		this.neoSyncHeight++
+		this.polyStartHeight++
 	}
 	return nil
 }

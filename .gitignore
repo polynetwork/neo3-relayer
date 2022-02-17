@@ -3,7 +3,7 @@
 
 boltdb/
 Logs/
-backups/
+backups/mainnet
 
 neo3_relayer_mainnet.json
 poly.dat

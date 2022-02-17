@@ -6,7 +6,7 @@ import (
 	"github.com/polynetwork/neo3-relayer/config"
 	"github.com/polynetwork/neo3-relayer/db"
 	"github.com/polynetwork/neo3-relayer/log"
-	rsdk "github.com/polynetwork/poly-go-sdk"
+	sdk "github.com/polynetwork/poly-go-sdk"
 	"os"
 )
 
@@ -14,23 +14,20 @@ var Log = log.Log
 
 // SyncService ...
 type SyncService struct {
-	relayAccount    *rsdk.Account
-	relaySdk        *rsdk.PolySdk
-	relaySyncHeight uint32
-	relayPubKeys    [][]byte
+	polySdk         *sdk.PolySdk
+	polyPubKeys     [][]byte
+	polyStartHeight uint32
 
-	nwh                *wallet.WalletHelper
-	neoSdk             *rpc.RpcClient
-	neoSyncHeight      uint32
-	neoNextConsensus   string
-	neoStateRootHeight uint32
+	nwh               *wallet.WalletHelper
+	neoSdk            *rpc.RpcClient
+	neoAllowedMethods map[string]bool
 
 	db     *db.BoltDB
 	config *config.Config
 }
 
 // NewSyncService ...
-func NewSyncService(acct *rsdk.Account, relaySdk *rsdk.PolySdk, neoAccount *wallet.WalletHelper, client *rpc.RpcClient) *SyncService {
+func NewSyncService(polySdk *sdk.PolySdk, neoAccount *wallet.WalletHelper, client *rpc.RpcClient) *SyncService {
 	if !checkIfExist(config.DefConfig.DBPath) {
 		os.Mkdir(config.DefConfig.DBPath, os.ModePerm)
 	}
@@ -39,14 +36,17 @@ func NewSyncService(acct *rsdk.Account, relaySdk *rsdk.PolySdk, neoAccount *wall
 		Log.Errorf("db.NewBoltDB error:%s", err)
 		os.Exit(1)
 	}
+	am := make(map[string]bool)
+	for _, m := range config.DefConfig.NeoConfig.AllowedMethods {
+		am[m] = true
+	}
 	syncSvr := &SyncService{
-		relayAccount:       acct,
-		relaySdk:           relaySdk,
-		neoSdk:             client,
-		neoStateRootHeight: 0,
-		nwh:                neoAccount,
-		db:                 boltDB,
-		config:             config.DefConfig,
+		polySdk:           polySdk,
+		neoSdk:            client,
+		nwh:               neoAccount,
+		neoAllowedMethods: am,
+		db:                boltDB,
+		config:            config.DefConfig,
 	}
 	return syncSvr
 }
@@ -55,8 +55,6 @@ func NewSyncService(acct *rsdk.Account, relaySdk *rsdk.PolySdk, neoAccount *wall
 func (this *SyncService) Run() {
 	go this.RelayToNeo()
 	go this.RelayToNeoCheckAndRetry()
-	go this.NeoToRelay()
-	go this.NeoToRelayCheckAndRetry()
 }
 
 func checkIfExist(dir string) bool {
@@ -65,4 +63,8 @@ func checkIfExist(dir string) bool {
 		return false
 	}
 	return true
+}
+
+func (this *SyncService) IsAllowedMethod(m string) bool {
+	return this.neoAllowedMethods[m]
 }

@@ -35,7 +35,7 @@ const (
 
 // GetCurrentNeoChainSyncHeight
 func (this *SyncService) GetCurrentNeoChainSyncHeight() (uint64, error) {
-	response := this.neoSdk.GetStorage(this.config.NeoCCMC, "AgE=")
+	response := this.neoSdk.GetStorage(this.config.NeoConfig.CCMC, "AgE=")
 	if response.HasError() {
 		return 0, fmt.Errorf("[GetCurrentNeoChainSyncHeight] GetStorage error: %s", response.GetErrorInfo())
 	}
@@ -123,7 +123,7 @@ func (this *SyncService) changeBookKeeper(block *types.Block) error {
 	Log.Infof("signature: %s", helper.BytesToHex(bs2))
 
 	// build script
-	scriptHash, err := helper.UInt160FromString(this.config.NeoCCMC) // "0x" prefixed hex string in big endian
+	scriptHash, err := helper.UInt160FromString(this.config.NeoConfig.CCMC) // "0x" prefixed hex string in big endian
 	if err != nil {
 		return fmt.Errorf("[changeBookKeeper] neo ccmc conversion error: %s", err)
 	}
@@ -145,7 +145,7 @@ func (this *SyncService) changeBookKeeper(block *types.Block) error {
 	}
 
 	// sign transaction
-	trx, err = this.nwh.SignTransaction(trx, this.config.NeoMagic)
+	trx, err = this.nwh.SignTransaction(trx, this.config.NeoConfig.NeoMagic)
 	if err != nil {
 		return fmt.Errorf("[changeBookKeeper] WalletHelper.SignTransaction error: %s", err)
 	}
@@ -155,7 +155,7 @@ func (this *SyncService) changeBookKeeper(block *types.Block) error {
 	// send the raw transaction
 	response := this.neoSdk.SendRawTransaction(rawTxString)
 	if response.HasError() {
-		return fmt.Errorf("[changeBookKeeper] SendRawTransaction error: %s, "+
+		return fmt.Errorf("[] SendRawTransaction error: %s, "+
 			"unsigned header hex string: %s, "+
 			"public keys hex string: %s, "+
 			"signatures hex string: %s"+
@@ -171,416 +171,221 @@ func (this *SyncService) changeBookKeeper(block *types.Block) error {
 
 	Log.Infof("[changeBookKeeper] txHash is: %s", trx.GetHash().String())
 
-	//// add new public keys to db, update relayPubkeys
-	//this.relayPubKeys = recoverPublicKeys(bs)
-	//err = this.db.PutPPKS(bs)
-	//if err != nil {
-	//	return fmt.Errorf("[changeBookKeeper] db.PutPPKS error: %s", err)
-	//}
 	return nil
 }
 
-func (this *SyncService) syncProofToNeo(key string, txHeight, lastSynced uint32) error {
-	blockHeightReliable := lastSynced + 1
-	// get the proof of the cross chain tx
-	crossStateProof, err := this.relaySdk.ClientMgr.GetCrossStatesProof(txHeight, key)
+func (this *SyncService) syncProofToNeo(height uint32, id []byte, subject []byte, sigData [][]byte) error {
+	toMerkleValue, err := DeserializeMerkleValue(subject)
 	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] GetCrossStatesProof error: %s", err)
+		return fmt.Errorf("DeserializeMerkleValue error: %s", err)
 	}
-	path, err := hex.DecodeString(crossStateProof.AuditPath)
-	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] DecodeString error: %s", err)
-	}
-	txProof := sc.ContractParameter{
-		Type:  sc.ByteArray,
-		Value: path,
-	}
-	//Log.Infof("txProof: " + helper.BytesToHex(path))
+	polyHash := helper.BytesToHex(toMerkleValue.TxHash)
 
-	// get the next block header since it has the stateroot for the cross chain tx
-	blockHeightToBeVerified := txHeight + 1
-	headerToBeVerified, err := this.relaySdk.GetHeaderByHeight(blockHeightToBeVerified)
-	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] GetHeaderByHeight error: %s", err)
-	}
-	txProofHeader := sc.ContractParameter{
-		Type:  sc.ByteArray,
-		Value: headerToBeVerified.GetMessage(),
-	}
-	//Log.Infof("txProofHeader: " + helper.BytesToHex(headerToBeVerified.GetMessage()))
-
-	// check constraints
-	if this.config.RtonContract != "" { // if empty, relay everything
-		stateRootValue, err := MerkleProve(path, headerToBeVerified.CrossStateRoot.ToArray())
-		if err != nil {
-			return fmt.Errorf("[syncProofToNeo] MerkleProve error: %s", err)
-		}
-		toMerkleValue, err := DeserializeMerkleValue(stateRootValue)
-
-		if err != nil {
-			return fmt.Errorf("[syncProofToNeo] DeserializeMerkleValue error: %s", err)
-		}
-
-		got := helper.UInt160FromBytes(toMerkleValue.TxParam.ToContract)
-		expected, _ := helper.UInt160FromString(this.config.RtonContract)
-		if !got.Equals(expected) {
-			Log.Infof("[syncProofToNeo] This cross chain tx is not for this specific contract.")
-			Log.Infof("toContract: 0x" + got.String())
+	// check poly to neo contract
+	if this.config.NeoConfig.P2NContract != "" {
+		got := "0x" + helper.BytesToHex(helper.ReverseBytes(toMerkleValue.TxParam.ToContract)) // little endian
+		expected := this.config.NeoConfig.P2NContract // big endian
+		if got != expected {
+			Log.Infof("This cross chain tx is not for this specific contract.")
+			Log.Infof("expected toContract: " + expected + ", but got: " + got)
 			return nil
 		}
 	}
-
-	var headerProofBytes []byte
-	var currentHeaderBytes []byte
-	var sigData [][]byte
-	var headerHash common.Uint256
-	var signListBytes []byte
-	if txHeight >= lastSynced {
-		// cross chain tx is in current epoch, no need for headerProof and currentHeader
-		headerProofBytes = []byte{}
-		currentHeaderBytes = []byte{}
-		// the signList should be the signature of the header at txHeight + 1
-		sigData = headerToBeVerified.SigData
-		headerHash = headerToBeVerified.Hash()
-	} else {
-		// txHeight < lastSynced, so blockHeightToBeVerified < blockHeightReliable
-		// get the merkle proof of the block containing the stateroot
-		merkleProof, err := this.relaySdk.GetMerkleProof(blockHeightToBeVerified, blockHeightReliable)
-		if err != nil {
-			return fmt.Errorf("[syncProofToNeo] GetMerkleProof error: %s", err)
-		}
-		headerProofBytes, err = hex.DecodeString(merkleProof.AuditPath)
-		if err != nil {
-			return fmt.Errorf("[syncProofToNeo] merkleProof DecodeString error: %s", err)
-		}
-
-		// get the raw current header
-		headerReliable, err := this.relaySdk.GetHeaderByHeight(blockHeightReliable)
-		if err != nil {
-			return fmt.Errorf("[syncProofToNeo] GetHeaderByHeight error: %s", err)
-		}
-		currentHeaderBytes = headerReliable.GetMessage()
-
-		// get the sign list of the current header
-		sigData = headerReliable.SigData
-		headerHash = headerReliable.Hash()
+	// limit the method to "unlock"
+	if this.IsAllowedMethod(string(toMerkleValue.TxParam.Method)) {
+		return fmt.Errorf("called method %s is invalid", helper.BytesToHex(toMerkleValue.TxParam.Method))
 	}
 
-	headerProof := sc.ContractParameter{
-		Type:  sc.ByteArray,
-		Value: headerProofBytes,
-	}
-	//Log.Infof("headerProof: " + helper.BytesToHex(headerProofBytes))
-
-	currentHeader := sc.ContractParameter{
-		Type:  sc.ByteArray,
-		Value: currentHeaderBytes,
-	}
-	//Log.Infof("currentHeader: " + helper.BytesToHex(currentHeaderBytes))
-	//Log.Infof("headerHash: 0x" + headerHash.ToHexString())
-
+	// check id == sha256.Sum256(subject)
 	hasher := goc.SHA256.New()
-	hasher.Write(headerHash.ToArray())
+	hasher.Write(subject)
 	digest := hasher.Sum(nil)
+	if bytes.Compare(id, digest) != 0 {
+		return fmt.Errorf("incorrect id: %s for toMerkleValue: %s", helper.BytesToHex(id), helper.BytesToHex(subject))
+	}
+	crossInfo := sc.ContractParameter{
+		Type:  sc.ByteArray,
+		Value: subject,
+	}
 
-	signListBytes, err = this.sortSignatures(sigData, digest)
+	// sort sigs
+	signListBytes, err := this.sortSignatures(sigData, digest)
 	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] sort signatures error: %s", err)
+		return fmt.Errorf("sort signatures error: %s", err)
 	}
 	signList := sc.ContractParameter{
 		Type:  sc.ByteArray,
 		Value: signListBytes,
 	}
-	//Log.Infof("signList: " + helper.BytesToHex(signListBytes))
-
-	stateRootValue, err := MerkleProve(path, headerToBeVerified.CrossStateRoot.ToArray())
-	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] MerkleProve error: %s", err)
-	}
-	toMerkleValue, err := DeserializeMerkleValue(stateRootValue)
-	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] DeserializeMerkleValue error: %s", err)
-	}
-
-	//Log.Infof("fromChainId: " + strconv.Itoa(int(toMerkleValue.FromChainID)))
-	//Log.Infof("polyTxHash: " + helper.BytesToHex(toMerkleValue.TxHash))
-	//Log.Infof("fromContract: " + helper.BytesToHex(toMerkleValue.TxParam.FromContract))
-	//Log.Infof("toChainId: " + strconv.Itoa(int(toMerkleValue.TxParam.ToChainID)))
-	//Log.Infof("sourceTxHash: " + helper.BytesToHex(toMerkleValue.TxParam.TxHash))
-	//Log.Infof("toContract: " + helper.BytesToHex(toMerkleValue.TxParam.ToContract))
-	//Log.Infof("method: " + helper.BytesToHex(toMerkleValue.TxParam.Method))
-	//Log.Infof("TxParamArgs: " + helper.BytesToHex(toMerkleValue.TxParam.Args))
-	//toAssetHash, toAddress, amount, err := DeserializeArgs(toMerkleValue.TxParam.Args)
-	//if err != nil {
-	//	return fmt.Errorf("[syncProofToNeo] DeserializeArgs error: %s", err)
-	//}
-	//Log.Infof("toAssetHash: " + helper.BytesToHex(toAssetHash))
-	//Log.Infof("toAddress: " + helper.BytesToHex(toAddress))
-	//Log.Infof("amount: " + amount.String())
-
-	//// check if source hash app log includes wrapper contract
-	//sourceTxHash := helper.UInt256FromBytes(toMerkleValue.TxParam.TxHash)
-	//txId := sourceTxHash.String()
-	//txGot := false
-	//res := this.neo2Sdk.GetApplicationLog(txId)
-	//for !txGot {
-	//	if res.HasError() {
-	//		if strings.Contains(res.GetErrorInfo(), "Unknown transaction") {
-	//			time.Sleep(5 * time.Second)
-	//			res = this.neo2Sdk.GetApplicationLog(txId)
-	//		} else {
-	//			return fmt.Errorf("[syncProofToNeo] this.neo2Sdk.GetApplicationLog error: %s", res.GetErrorInfo())
-	//		}
-	//	} else {
-	//		txGot = true
-	//	}
-	//}
-	//if !this.checkIsNeo2Wrapper(res.Result) {
-	//	Log.Infof("[syncProofToNeo] this tx 0x%s is not from neo2 wrapper", txId)
-	//	return nil
-	//}
-
-	// limit the method to "unlock"
-	if helper.BytesToHex(toMerkleValue.TxParam.Method) != "756e6c6f636b" { // unlock
-		return fmt.Errorf("[syncProofToNeo] called method is invalid, height %d, key %s", txHeight, key)
-	}
 
 	// build script
-	scriptHash, err := helper.UInt160FromString(this.config.NeoCCMC)
+	scriptHash, err := helper.UInt160FromString(this.config.NeoConfig.CCMC)
 	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] neo ccmc conversion error: %s", err)
+		return fmt.Errorf("neo ccmc conversion error: %s", err)
 	}
-	script, err := sc.MakeScript(scriptHash, VERIFY_AND_EXECUTE_TX, []interface{}{txProof, txProofHeader, headerProof, currentHeader, signList})
+	script, err := sc.MakeScript(scriptHash, VERIFY_AND_EXECUTE_TX, []interface{}{crossInfo, signList})
 	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] sc.MakeScript error: %s", err)
+		return fmt.Errorf("sc.MakeScript error: %s", err)
 	}
 	//Log.Infof("script: " + helper.BytesToHex(script))
 	balancesGas, err := this.nwh.GetAccountAndBalance(tx.GasToken)
 	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] WalletHelper.GetAccountAndBalance error: %s", err)
+		return fmt.Errorf("WalletHelper.GetAccountAndBalance error: %s", err)
 	}
 
 	retry := &db.Retry{
-		Height: txHeight,
-		Key:    key,
+		Height: height,
+		TxHash: polyHash,
+		Id: id,
+		Subject: subject,
 	}
 	sink := common.NewZeroCopySink(nil)
 	retry.Serialization(sink)
 	v := sink.Bytes()
 
-	trx, err := this.nwh.MakeTransaction(script, nil, []tx.ITransactionAttribute{}, balancesGas)
+	neoTrx, err := this.nwh.MakeTransaction(script, nil, []tx.ITransactionAttribute{}, balancesGas)
 	if err != nil {
 		if strings.Contains(err.Error(), "insufficient GAS") {
 			err = this.db.PutNeoRetry(v) // this tx is not ready thus will not cost extra gas, so put it into retry
 			if err != nil {
-				return fmt.Errorf("[syncProofToNeo] this.db.PutNeoRetry error: %s", err)
+				return fmt.Errorf("this.db.PutNeoRetry error: %s", err)
 			}
-			Log.Infof("[syncProofToNeo] insufficient GAS, put tx into retry db, height %d, key %s, db key %s", txHeight, key, helper.BytesToHex(v))
+			Log.Infof("insufficient GAS, put tx into retry db, height %d, polyHash %s, db key %s", height, polyHash, helper.BytesToHex(v))
 			return nil
 		}
-		return fmt.Errorf("[syncProofToNeo] WalletHelper.MakeTransaction error: %s", err)
+		return fmt.Errorf("WalletHelper.MakeTransaction error: %s", err)
 	}
 
 	// sign transaction
-	trx, err = this.nwh.SignTransaction(trx, this.config.NeoMagic)
+	neoTrx, err = this.nwh.SignTransaction(neoTrx, this.config.NeoConfig.NeoMagic)
 	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] WalletHelper.SignTransaction error: %s", err)
+		return fmt.Errorf("WalletHelper.SignTransaction error: %s", err)
 	}
-	rawTxString := crypto.Base64Encode(trx.ToByteArray())
+	rawTxString := crypto.Base64Encode(neoTrx.ToByteArray())
 	//Log.Infof("rawTxString: " + rawTxString)
 
 	// send the raw transaction
 	response := this.neoSdk.SendRawTransaction(rawTxString)
 	if response.HasError() {
-		return fmt.Errorf("[syncProofToNeo] SendRawTransaction error: %s, "+
-			"tx height: %d, "+
-			"key hex string: %s, "+
-			"block height reliable: %d, "+
+		return fmt.Errorf("SendRawTransaction error: %s, "+
 			"script hex string: %s, "+
 			"raw tx string: %s",
-			response.ErrorResponse.Error.Message,
-			txHeight,
-			key,
-			blockHeightReliable,
+			response.GetErrorInfo(),
 			helper.BytesToHex(script),
 			rawTxString)
 	}
-	txHash := trx.GetHash().String()
-	Log.Infof("[syncProofToNeo] syncProofToNeo txHash is: %s", txHash)
-	err = this.db.PutNeoCheck(txHash, v)
+	neoHash := neoTrx.GetHash().String()
+	Log.Infof("syncProofToNeo txHash is: %s", neoHash)
+	err = this.db.PutNeoCheck(neoHash, v)
 	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] this.db.PutNeoCheck error: %s", err)
+		return fmt.Errorf("this.db.PutNeoCheck error: %s", err)
 	}
 
 	return nil
 }
 
-func (this *SyncService) retrySyncProofToNeo(v []byte, lastSynced uint32) error {
+func (this *SyncService) retrySyncProofToNeo(v []byte) error {
+	// deserialize retry to get cross chain info
 	retry := new(db.Retry)
 	err := retry.Deserialization(common.NewZeroCopySource(v))
 	if err != nil {
-		return fmt.Errorf("[retrySyncProofToNeo] retry.Deserialization error: %s", err)
+		return fmt.Errorf("retry.Deserialization error: %s", err)
 	}
-	txHeight := retry.Height
-	key := retry.Key
+	height := retry.Height
+	id := retry.Id
+	subject := retry.Subject
 
-	blockHeightReliable := lastSynced + 1
-	// get the proof of the cross chain tx
-	crossStateProof, err := this.relaySdk.ClientMgr.GetCrossStatesProof(txHeight, key)
+	toMerkleValue, err := DeserializeMerkleValue(subject)
 	if err != nil {
-		return fmt.Errorf("[retrySyncProofToNeo] GetCrossStatesProof error: %s", err)
+		return fmt.Errorf("DeserializeMerkleValue error: %s", err)
 	}
-	path, err := hex.DecodeString(crossStateProof.AuditPath)
+	polyHash := helper.BytesToHex(toMerkleValue.TxHash)
+	// limit the method to "unlock"
+	if this.IsAllowedMethod(string(toMerkleValue.TxParam.Method)) {
+		return fmt.Errorf("called method %s is invalid", helper.BytesToHex(toMerkleValue.TxParam.Method))
+	}
+
+	Log.Infof("retrying old tx: %s at height %d", polyHash, height)
+
+	polyTx, err := this.polySdk.GetTransaction(polyHash)
 	if err != nil {
-		return fmt.Errorf("[retrySyncProofToNeo] DecodeString error: %s", err)
+		return fmt.Errorf("GetTransaction error: %s", err)
 	}
-	txProof := sc.ContractParameter{
-		Type:  sc.ByteArray,
-		Value: path,
+	if len(polyTx.Sigs) <= 0 {
+		return fmt.Errorf("tx: %s has no sigs", polyHash)
 	}
-	//Log.Infof("path: " + helper.BytesToHex(path))
+	sigData := polyTx.Sigs[0].SigData
 
-	// get the next block header since it has the stateroot for the cross chain tx
-	blockHeightToBeVerified := txHeight + 1
-	headerToBeVerified, err := this.relaySdk.GetHeaderByHeight(blockHeightToBeVerified)
-	if err != nil {
-		return fmt.Errorf("[retrySyncProofToNeo] GetHeaderByHeight error: %s", err)
-	}
-	txProofHeader := sc.ContractParameter{
-		Type:  sc.ByteArray,
-		Value: headerToBeVerified.GetMessage(),
-	}
-
-	//Log.Infof("txProofHeader: " + helper.BytesToHex(headerToBeVerified.GetMessage()))
-
-	var headerProofBytes []byte
-	var currentHeaderBytes []byte
-	var sigData [][]byte
-	var headerHash common.Uint256
-	var signListBytes []byte
-	if txHeight >= lastSynced {
-		// cross chain tx is in current epoch, no need for headerProof and currentHeader
-		headerProofBytes = []byte{}
-		currentHeaderBytes = []byte{}
-		// the signList should be the signature of the header at txHeight + 1
-		sigData = headerToBeVerified.SigData
-		headerHash = headerToBeVerified.Hash()
-	} else {
-		// txHeight < lastSynced, so blockHeightToBeVerified < blockHeightReliable
-		// get the merkle proof of the block containing the stateroot
-		merkleProof, err := this.relaySdk.GetMerkleProof(blockHeightToBeVerified, blockHeightReliable)
-		if err != nil {
-			return fmt.Errorf("[retrySyncProofToNeo] GetMerkleProof error: %s", err)
-		}
-		headerProofBytes, err = hex.DecodeString(merkleProof.AuditPath)
-		if err != nil {
-			return fmt.Errorf("[retrySyncProofToNeo] merkleProof DecodeString error: %s", err)
-		}
-		//Log.Infof("headerPath: " + helper.BytesToHex(headerProofBytes))
-
-		// get the raw current header
-		headerReliable, err := this.relaySdk.GetHeaderByHeight(blockHeightReliable)
-		if err != nil {
-			return fmt.Errorf("[retrySyncProofToNeo] GetHeaderByHeight error: %s", err)
-		}
-		currentHeaderBytes = headerReliable.GetMessage()
-
-		// get the sign list of the current header
-		sigData = headerReliable.SigData
-		headerHash = headerReliable.Hash()
-	}
-
-	headerProof := sc.ContractParameter{
-		Type:  sc.ByteArray,
-		Value: headerProofBytes,
-	}
-	//Log.Infof("headProof: " + helper.BytesToHex(headerProofBytes))
-
-	currentHeader := sc.ContractParameter{
-		Type:  sc.ByteArray,
-		Value: currentHeaderBytes,
-	}
-	//Log.Infof("currentHeader: " + helper.BytesToHex(currentHeaderBytes))
-
+	// check id == sha256.Sum256(subject)
 	hasher := goc.SHA256.New()
-	hasher.Write(headerHash.ToArray())
+	hasher.Write(subject)
 	digest := hasher.Sum(nil)
-	signListBytes, err = this.sortSignatures(sigData, digest)
+	if bytes.Compare(id, digest) != 0 {
+		return fmt.Errorf("incorrect id: %s for toMerkleValue: %s", helper.BytesToHex(id), helper.BytesToHex(subject))
+	}
+	crossInfo := sc.ContractParameter{
+		Type:  sc.ByteArray,
+		Value: subject,
+	}
+
+	// sort sigs
+	signListBytes, err := this.sortSignatures(sigData, digest)
 	if err != nil {
-		return fmt.Errorf("[retrySyncProofToNeo] sort signatures error: %s", err)
+		return fmt.Errorf("sort signatures error: %s", err)
 	}
 	signList := sc.ContractParameter{
 		Type:  sc.ByteArray,
 		Value: signListBytes,
 	}
-	//Log.Infof("signList: " + helper.BytesToHex(signListBytes))
-
-	stateRootValue, err := MerkleProve(path, headerToBeVerified.CrossStateRoot.ToArray())
-	if err != nil {
-		return fmt.Errorf("[retrySyncProofToNeo] MerkleProve error: %s", err)
-	}
-	toMerkleValue, err := DeserializeMerkleValue(stateRootValue)
-	if err != nil {
-		return fmt.Errorf("[retrySyncProofToNeo] DeserializeMerkleValue error: %s", err)
-	}
-
-	// limit the method to "unlock"
-	if helper.BytesToHex(toMerkleValue.TxParam.Method) != "756e6c6f636b" { // unlock
-		return fmt.Errorf("[syncProofToNeo] called method is invalid, height %d, key %s", txHeight, key)
-	}
 
 	// build script
-	scriptHash, err := helper.UInt160FromString(this.config.NeoCCMC) // hex string in little endian
+	scriptHash, err := helper.UInt160FromString(this.config.NeoConfig.CCMC)
 	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] neo ccmc conversion error: %s", err)
+		return fmt.Errorf("neo ccmc conversion error: %s", err)
 	}
-	script, err := sc.MakeScript(scriptHash, VERIFY_AND_EXECUTE_TX, []interface{}{txProof, txProofHeader, headerProof, currentHeader, signList})
+	script, err := sc.MakeScript(scriptHash, VERIFY_AND_EXECUTE_TX, []interface{}{crossInfo, signList})
 	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] sc.MakeScript error: %s", err)
+		return fmt.Errorf("sc.MakeScript error: %s", err)
 	}
 	//Log.Infof("script: " + helper.BytesToHex(script))
 	balancesGas, err := this.nwh.GetAccountAndBalance(tx.GasToken)
 	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] WalletHelper.GetAccountAndBalance error: %s", err)
+		return fmt.Errorf("WalletHelper.GetAccountAndBalance error: %s", err)
 	}
-	trx, err := this.nwh.MakeTransaction(script, nil, []tx.ITransactionAttribute{}, balancesGas)
+
+	neoTrx, err := this.nwh.MakeTransaction(script, nil, []tx.ITransactionAttribute{}, balancesGas)
 	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] WalletHelper.MakeTransaction error: %s", err)
+		return fmt.Errorf("WalletHelper.MakeTransaction error: %s", err)
 	}
 
 	// sign transaction
-	trx, err = this.nwh.SignTransaction(trx, this.config.NeoMagic)
+	neoTrx, err = this.nwh.SignTransaction(neoTrx, this.config.NeoConfig.NeoMagic)
 	if err != nil {
-		return fmt.Errorf("[syncProofToNeo] WalletHelper.SignTransaction error: %s", err)
+		return fmt.Errorf("WalletHelper.SignTransaction error: %s", err)
 	}
-	rawTxString := crypto.Base64Encode(trx.ToByteArray())
+	rawTxString := crypto.Base64Encode(neoTrx.ToByteArray())
 	//Log.Infof("rawTxString: " + rawTxString)
 
 	// send the raw transaction
 	response := this.neoSdk.SendRawTransaction(rawTxString)
 	if response.HasError() {
-		return fmt.Errorf("[retrySyncProofToNeo] SendRawTransaction error: %s, "+
-			"tx height: %d, "+
-			"key hex string: %s, "+
-			"block height reliable: %d"+
+		return fmt.Errorf("SendRawTransaction error: %s, "+
 			"script hex string: %s, "+
 			"raw tx string: %s",
-			response.ErrorResponse.Error.Message,
-			txHeight,
-			key,
-			blockHeightReliable,
+			response.GetErrorInfo(),
 			helper.BytesToHex(script),
 			rawTxString)
 	}
-	txHash := trx.GetHash().String()
-	Log.Infof("[retrySyncProofToNeo] syncProofToNeo txHash is: %s", txHash)
-	err = this.db.PutNeoCheck(txHash, v)
+	neoHash := neoTrx.GetHash().String()
+
+	Log.Infof("retrySyncProofToNeo txHash is: %s", neoHash)
+	err = this.db.PutNeoCheck(neoHash, v)
 	if err != nil {
-		return fmt.Errorf("[retrySyncProofToNeo] this.db.PutNeoCheck error: %s", err)
+		return fmt.Errorf("this.db.PutNeoCheck error: %s", err)
 	}
 	err = this.db.DeleteNeoRetry(v)
 	if err != nil {
-		return fmt.Errorf("[retrySyncProofToNeo] this.db.DeleteNeoRetry error: %s", err)
+		return fmt.Errorf("this.db.DeleteNeoRetry error: %s", err)
 	}
 	return nil
 }
@@ -588,40 +393,41 @@ func (this *SyncService) retrySyncProofToNeo(v []byte, lastSynced uint32) error 
 func (this *SyncService) neoCheckTx() error {
 	checkMap, err := this.db.GetNeoAllCheck()
 	if err != nil {
-		return fmt.Errorf("[neoCheckTx] this.db.GetNeoAllCheck error: %s", err)
+		return fmt.Errorf("this.db.GetNeoAllCheck error: %s", err)
 	}
 	for k, v := range checkMap {
 		retry := new(db.Retry)
 		err := retry.Deserialization(common.NewZeroCopySource(v))
 		if err != nil {
-			return fmt.Errorf("[neoCheckTx] retry.Deserialization error: %s", err)
+			return fmt.Errorf("retry.Deserialization error: %s", err)
 		}
+
 		// start check tx
 		res := this.neoSdk.GetApplicationLog(k)
 		if res.HasError() {
 			info := res.GetErrorInfo()
 			if !strings.Contains(info, "Unknown transaction/blockhash") {
-				Log.Errorf("[neoCheckTx] this.neoSdk.GetApplicationLog error: %s, txHash: %s", res.GetErrorInfo(), k)
+				Log.Errorf("this.neoSdk.GetApplicationLog error: %s, txHash: %s", res.GetErrorInfo(), k)
 			}
 			continue
 		}
 		// can delete check now
 		err = this.db.DeleteNeoCheck(k)
 		if err != nil {
-			return fmt.Errorf("[neoCheckTx] this.db.DeleteNeoCheck error: %s", err)
+			return fmt.Errorf("this.db.DeleteNeoCheck error: %s", err)
 		}
 		appLog := res.Result
 		if len(appLog.Executions) < 1 {
-			Log.Errorf("[neoCheckTx] this.neoSdk.GetApplicationLog error: no executions, txHash: %s", k)
+			Log.Errorf("this.neoSdk.GetApplicationLog error: no executions, txHash: %s", k)
 			continue
 		}
 		exec := appLog.Executions[0]
 		if exec.VMState == "FAULT" {
-			Log.Errorf("[neoCheckTx] tx engine faulted, height: %d, key: %s, exception: %s", retry.Height, retry.Key, exec.Exception)
+			Log.Errorf("tx engine faulted, neoHash: %s, polyHash: %s at height %d, exception: %s", k, retry.TxHash, retry.Height, exec.Exception)
 			continue
 		}
 		if len(exec.Stack) < 1 {
-			Log.Errorf("[neoCheckTx] this.neoSdk.GetApplicationLog error: no stack result, txHash: %s", k)
+			Log.Errorf("this.neoSdk.GetApplicationLog error: no stack result, txHash: %s", k)
 			continue
 		}
 		stack := exec.Stack[0]
@@ -629,13 +435,13 @@ func (this *SyncService) neoCheckTx() error {
 			b := stack.Value.(bool)
 			if b == false {
 				notifications := exec.Notifications
-				if !appLogNotificationContains(notifications, this.config.NeoCCMC, "Transaction has been executed") { // if executed, skip
-					Log.Errorf("[neoCheckTx] tx stack result is false, height: %d, key: %s, check app log details and retry", retry.Height, retry.Key)
+				if !appLogNotificationContains(notifications, this.config.NeoConfig.CCMC, "Transaction has been executed") { // if executed, skip
+					Log.Errorf("tx stack result is false, neoHash: %s, polyHash: %s at height %d, check app log details and retry", k, retry.TxHash, retry.Height)
 				}
 				continue
 			}
 		}
-		Log.Infof("[neoCheckTx] tx is successful, hash: %s, height: %d", k, retry.Height)
+		Log.Infof("tx is successful, hash: %s, polyHash: %s at height %d", k, retry.TxHash, retry.Height)
 	}
 	return nil
 }
@@ -643,17 +449,18 @@ func (this *SyncService) neoCheckTx() error {
 func (this *SyncService) neoRetryTx() error {
 	retryList, err := this.db.GetAllNeoRetry()
 	if err != nil {
-		return fmt.Errorf("[neoRetryTx] this.db.GetAllRetry error: %s", err)
+		return fmt.Errorf("this.db.GetAllRetry error: %s", err)
 	}
 	for _, v := range retryList {
-		// get current neo chain sync height, which is the reliable header height
-		currentNeoChainSyncHeight, err := this.GetCurrentNeoChainSyncHeight()
+		retry := new(db.Retry)
+		err := retry.Deserialization(common.NewZeroCopySource(v))
 		if err != nil {
-			Log.Errorf("[neoRetryTx] GetCurrentNeoChainSyncHeight error: ", err)
+			return fmt.Errorf("retry.Deserialization error: %s", err)
 		}
-		err = this.retrySyncProofToNeo(v, uint32(currentNeoChainSyncHeight))
+
+		err = this.retrySyncProofToNeo(v)
 		if err != nil {
-			Log.Errorf("[neoRetryTx] this.retrySyncProofToNeo error:%s", err)
+			Log.Errorf("this.retrySyncProofToNeo error:%s", err)
 		}
 		time.Sleep(time.Duration(this.config.RetryInterval) * time.Second)
 	}
@@ -673,46 +480,46 @@ func (this *SyncService) waitForNeoBlock() {
 }
 
 func (this *SyncService) getCurrentPolyBookKeeps() error {
-	scriptHash, err := helper.UInt160FromString(this.config.NeoCCMC) // hex string in little endian
+	scriptHash, err := helper.UInt160FromString(this.config.NeoConfig.CCMC) // hex string in little endian
 	if err != nil {
-		return fmt.Errorf("[getBookKeeps] neo ccmc conversion error: %s", err)
+		return fmt.Errorf("neo ccmc conversion error: %s", err)
 	}
 	script, err := sc.MakeScript(scriptHash, GET_BOOK_KEEPERS, []interface{}{})
 	if err != nil {
-		return fmt.Errorf("[getBookKeeps] sc.MakeScript error: %s", err)
+		return fmt.Errorf("sc.MakeScript error: %s", err)
 	}
 	response := this.neoSdk.InvokeScript(crypto.Base64Encode(script), nil)
 	if response.HasError() {
-		return fmt.Errorf("[getBookKeeps] InvokeScript error: %s", response.GetErrorInfo())
+		return fmt.Errorf("InvokeScript error: %s", response.GetErrorInfo())
 	}
 	if len(response.Result.Stack) == 0 {
-		return fmt.Errorf("[getBookKeeps] InvokeScript response stack incorrect length")
+		return fmt.Errorf("InvokeScript response stack incorrect length")
 	}
 	stack0 := response.Result.Stack[0] // Array of ByteArray
 	stack0.Convert()
 	if stack0.Type != "Array" {
-		return fmt.Errorf("[getBookKeeps] InvokeScript response stack incorrect type")
+		return fmt.Errorf("InvokeScript response stack incorrect type")
 	}
 	values := stack0.Value.([]models.InvokeStack)
 
 	pubKeys := make([][]byte, len(values))
 	for i, v := range values {
 		if v.Type != "ByteString" {
-			return fmt.Errorf("[getBookKeeps] InvokeScript response inside stack incorrect type")
+			return fmt.Errorf("InvokeScript response inside stack incorrect type")
 		}
 		s, err := crypto.Base64Decode(v.Value.(string))
 		if err != nil {
-			return fmt.Errorf("[getBookKeeps] crypto.Base64Decode error: %s", err)
+			return fmt.Errorf("crypto.Base64Decode error: %s", err)
 		}
 		//pubKey, err := crypto.FromBytes(s, btcec.S256())
 		pubKey, err := btcec.ParsePubKey(s, btcec.S256())
 		if err != nil {
-			return fmt.Errorf("[getBookKeeps] crypto.NewECPointFromString error: %s", err)
+			return fmt.Errorf("crypto.NewECPointFromString error: %s", err)
 		}
 		pubKeys[i] = pubKey.SerializeUncompressed() // length 65
 		//Log.Infof(helper.BytesToHex(pubKeys[i]))
 	}
-	this.relayPubKeys = pubKeys
+	this.polyPubKeys = pubKeys
 	return nil
 }
 
@@ -720,7 +527,7 @@ func (this *SyncService) getCurrentPolyBookKeeps() error {
 func (this *SyncService) sortSignatures(sigs [][]byte, hash []byte) ([]byte, error) {
 	// ----------------------------------------------------------------
 	//// get pubKeys from db if nil
-	//if len(this.relayPubKeys) == 0 {
+	//if len(this.polyPubKeys) == 0 {
 	//	pubKeys, err := this.db.GetPPKS()
 	//	if err != nil {
 	//		return nil, err
@@ -731,16 +538,16 @@ func (this *SyncService) sortSignatures(sigs [][]byte, hash []byte) ([]byte, err
 	//	if len(pubKeys)%65 != 0 {
 	//		return nil, fmt.Errorf("wrong length for relay public keys in db")
 	//	}
-	//	this.relayPubKeys = recoverPublicKeys(pubKeys)
+	//	this.polyPubKeys = recoverPublicKeys(pubKeys)
 	//}
 	// ------------------------------------------------------------------
 
 	// get pubKeys from ccmc
 	err := this.getCurrentPolyBookKeeps()
 	if err != nil {
-		return nil, fmt.Errorf("[sortSignatures] getCurrentPolyBookKeeps error: %s", err)
+		return nil, fmt.Errorf("getCurrentPolyBookKeeps error: %s", err)
 	}
-	return sortSignatures(this.relayPubKeys, sigs, hash)
+	return sortSignatures(this.polyPubKeys, sigs, hash)
 }
 
 //func (this *SyncService) checkIsNeo2Wrapper(applicationLog models2.RpcApplicationLog) bool {
@@ -763,7 +570,7 @@ func (this *SyncService) sortSignatures(sigs [][]byte, hash []byte) ([]byte, err
 func sortSignatures(pubKeys, sigs [][]byte, hash []byte) ([]byte, error) {
 	// sig length should >= 2/3 * len(pubKeys) + 1
 	if len(sigs) < len(pubKeys)*2/3+1 {
-		return nil, fmt.Errorf("[sortSignatures] not enough signatures")
+		return nil, fmt.Errorf("not enough signatures")
 	}
 	sortedSigs := make([][]byte, len(pubKeys))
 	//Log.Infof("before sorting sig: ")
@@ -772,7 +579,7 @@ func sortSignatures(pubKeys, sigs [][]byte, hash []byte) ([]byte, error) {
 		pubKey, err := recoverPublicKeyFromSignature(sig, hash) // sig in BTC format
 		//Log.Infof(helper.BytesToHex(pubKey))
 		if err != nil {
-			return nil, fmt.Errorf("[sortSignatures] recoverPublicKeyFromSignature error: %s", err)
+			return nil, fmt.Errorf("recoverPublicKeyFromSignature error: %s", err)
 		}
 		//newPubKey := append([]byte{0x12, 0x05}, pubKey...)
 		//Log.Infof(helper.BytesToHex(newPubKey))
@@ -784,7 +591,7 @@ func sortSignatures(pubKeys, sigs [][]byte, hash []byte) ([]byte, error) {
 			}
 		}
 		if index == -1 {
-			return nil, fmt.Errorf("[sortSignatures] signature (%s) recovered public key (%s) not found", helper.BytesToHex(sig), helper.BytesToHex(pubKey))
+			return nil, fmt.Errorf("signature (%s) recovered public key (%s) not found", helper.BytesToHex(sig), helper.BytesToHex(pubKey))
 		}
 		sortedSigs[index] = sig
 	}

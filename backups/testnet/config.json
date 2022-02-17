@@ -1,0 +1,25 @@
+{
+  "PolyConfig": {
+    "RpcUrl": "http://124.156.226.204:20336",
+    "ChangeBookkeeper": true
+  },
+  "NeoConfig": {
+    "SideChainID": 88,
+    "NeoMagic": 877933390,
+    "WalletFile": "./N3_test.json",
+    "RpcUrl": "https://n3seed1.ngd.network:20332",
+    "CCMC": "0x618d44dc3af16c6120dbf65402024f40a04f772a",
+    "P2NContract": "",
+    "Neo2RpcUrl": "http://seed1.ngd.network:20332",
+    "Neo2Wrapper": "0x7997ac991b66ca3810602639a2f2c1bd985e8b5a",
+    "AllowedMethods": [
+      "unlock"
+    ]
+  },
+  "ForceConfig": {
+    "PolyStartHeight": 19965920
+  },
+  "ScanInterval": 15,
+  "RetryInterval": 5,
+  "DBPath": "boltdb"
+}

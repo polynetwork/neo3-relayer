@@ -12,24 +12,33 @@ const (
 	DEFAULT_LOG_LEVEL        = 2
 )
 
-//Config object used by neo-instance
+//Config object
 type Config struct {
-	RelayJsonRpcUrl   string
-	WalletFile        string
-	RelayAccountsPath string
-	NeoMagic          uint32
-	NeoWalletFile     string
-	NeoJsonRpcUrl     string
-	NeoChainID        uint64
-	NeoCCMC           string // big endian string, like 0x1234567812345678123456781234567812345678
-	NtorContract      string
-	RtonContract      string
-	ScanInterval      uint64
-	RetryInterval     uint64
-	DBPath            string
-	ChangeBookkeeper  bool
-	PolyStartHeight   uint32
-	NeoStartHeight    uint32
+	PolyConfig    PolyConfig
+	NeoConfig     NeoConfig
+	ForceConfig   ForceConfig
+	ScanInterval  uint64
+	RetryInterval uint64
+	DBPath        string
+}
+
+type PolyConfig struct {
+	RpcUrl           string
+	ChangeBookkeeper bool
+}
+
+type NeoConfig struct {
+	SideChainID    uint64
+	NeoMagic       uint32
+	WalletFile     string
+	RpcUrl         string
+	CCMC           string // big endian string, like 0x1234567812345678123456781234567812345678
+	P2NContract    string // poly to neo contract
+	AllowedMethods []string
+}
+
+type ForceConfig struct {
+	PolyStartHeight uint32
 }
 
 //Default config instance
