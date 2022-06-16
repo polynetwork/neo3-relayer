@@ -126,7 +126,7 @@ func TestRecoverPublicKeysFromSigs(t *testing.T) {
 	sigs := make([][]byte, len(sigStrings))
 	for i, ss := range sigStrings {
 		sigs[i] = helper.HexToBytes(ss)
-		pubKey, err := recoverPublicKeyFromSignature1(sigs[i], digest)
+		pubKey, err := recoverPublicKeyFromSignature(sigs[i], digest)
 		assert.Nil(t, err)
 		log.Println(helper.BytesToHex(pubKey))
 	}

@@ -1,110 +1,140 @@
 package service
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	vconfig "github.com/polynetwork/poly/consensus/vbft/config"
-	"github.com/polynetwork/poly/native/service/utils"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
+	"github.com/ethereum/go-ethereum/contracts/native/go_abi/signature_manager_abi"
+	"github.com/ethereum/go-ethereum/contracts/native/governance/signature_manager"
+	"github.com/joeqian10/neo3-gogogo/helper"
+
+	"github.com/ethereum/go-ethereum/contracts/native/utils"
+	"github.com/ethereum/go-ethereum/rlp"
+
 	"time"
 )
 
-// RelayToNeo sync headers from relay chain to neo
-func (this *SyncService) RelayToNeo() {
-	this.polyStartHeight = this.config.ForceConfig.PolyStartHeight
+// ZionToNeo syncs from zion to neo
+func (this *SyncService) ZionToNeo() {
+	this.zionStartHeight = this.config.ForceConfig.ZionStartHeight
 	for {
-		currentRelayChainHeight, err := this.polySdk.GetCurrentBlockHeight()
+		currentZionHeight, err := this.zionSdk.GetNodeHeight()
 		if err != nil {
-			Log.Errorf("[RelayToNeo] GetCurrentBlockHeight error: ", err)
+			Log.Errorf("[ZionToNeo] GetCurrentBlockHeight error: ", err)
 		}
-		err = this.relayToNeo(this.polyStartHeight, currentRelayChainHeight)
+		err = this.zionToNeo(this.zionStartHeight, currentZionHeight)
 		if err != nil {
-			Log.Errorf("[RelayToNeo] relayToNeo error: ", err)
+			Log.Errorf("[ZionToNeo] zionToNeo error: ", err)
 		}
 		time.Sleep(time.Duration(this.config.ScanInterval) * time.Second)
 	}
 }
 
-func (this *SyncService) relayToNeo(m, n uint32) error {
+func (this *SyncService) zionToNeo(m, n uint64) error {
 	for i := m; i < n; i++ {
 		Log.Infof("start parse block %d", i)
 
-		block, err := this.polySdk.GetBlockByHeight(i)
-		if err != nil {
-			return fmt.Errorf("GetBlockByHeight error: %s", err)
-		}
-		txs := block.Transactions
-		for _, tx := range txs {
-			txHash := tx.Hash()
-			event, err := this.polySdk.GetSmartContractEvent(txHash.ToHexString())
-			if err != nil {
-				return fmt.Errorf("polySdk.GetSmartContractEvent error: %s, tx: %s", err, txHash.ToHexString())
-			}
-			for _, notify := range event.Notify {
-				states, ok := notify.States.([]interface{})
-				if !ok {
-					continue
-				}
-				// todo, SignatureManagerContractAddress
-				if notify.ContractAddress !=  utils.SignatureManagerContractAddress.ToHexString() {
-					continue
-				}
-				// States: []interface{}{"AddSignatureQuorum", id, params.Subject, params.SideChainID},
-				name := states[0].(string)
-				if name == "AddSignatureQuorum" {
-					toChainID := uint64(states[3].(float64))
-					if toChainID == this.config.NeoConfig.SideChainID {
-						id := states[1].([]byte)
-						subject := states[2].([]byte)
-						if len(tx.Sigs) <= 0 {
-							return fmt.Errorf("tx: %s has no sigs", txHash.ToHexString())
-						}
-						sigData := tx.Sigs[0].SigData
-						err = this.syncProofToNeo(i, id, subject, sigData)
-						if err != nil {
-							Log.Errorf("--------------------------------------------------")
-							Log.Errorf("syncProofToNeo error: %s", err)
-							Log.Errorf("polyHeight: %d, hash: %s", i, txHash.ToHexString())
-							Log.Errorf("--------------------------------------------------")
-						}
-					}
-				}
-			}
-		}
+		//----------if use NewCrossChainManager
+		//ccm, err := cross_chain_manager_abi.NewCrossChainManager(utils.CrossChainManagerContractAddress, this.zionSdk.GetEthClient())
+		//if err != nil {
+		//	return fmt.Errorf("NewCrossChainManager error: %s", err)
+		//}
+		//opt := &bind.FilterOpts{
+		//	Start:   i,
+		//	End:     &i,
+		//	Context: context.Background(),
+		//}
+		//events, err := ccm.FilterMakeProof(opt)
+		//if err != nil {
+		//	return fmt.Errorf("FilterMakeProof error: %s", err)
+		//}
+		//--------------
 
-		if this.config.PolyConfig.ChangeBookkeeper {
-			// sync key header, change book keeper,
-			// but should be done after all cross chain tx in this block are handled for verification purpose.
-			blkInfo := &vconfig.VbftBlockInfo{}
-			if err := json.Unmarshal(block.Header.ConsensusPayload, blkInfo); err != nil {
-				return fmt.Errorf("[relayToNeo] unmarshal blockInfo error: %s", err)
-			}
-			if blkInfo.NewChainConfig != nil {
-				this.waitForNeoBlock() // wait for neo block
-				err = this.changeBookKeeper(block)
+		sm, err := signature_manager_abi.NewSignatureManager(utils.SignatureManagerContractAddress, this.zionSdk.GetEthClient())
+		if err != nil {
+			return fmt.Errorf("NewSignatureManager error: %s", err)
+		}
+		opt := &bind.FilterOpts{
+			Start:   i,
+			End:     &i,
+			Context: context.Background(),
+		}
+		// if the event is emitted, all the sigs are collected, and the status is true now
+		events, err := sm.FilterAddSignatureQuorumEvent(opt)
+		if err != nil {
+			return fmt.Errorf("sm.FilterAddSignatureQuorumEvent error: %s", err)
+		}
+		if events != nil {
+			for events.Next() {
+				evt := events.Event
+				// States: []interface{}{"AddSignatureQuorum", id, params.Subject, params.SideChainID},
+				// AddNotify(ABI, []string{signature_manager_abi.EventAddSignatureQuorumEvent}, id, params.Subject, params.SideChainID)
+				if evt.SideChainI.Uint64() != this.config.NeoConfig.SideChainID {
+					continue
+				}
+				id := evt.Id
+				subject := evt.Subject
+				sigData, err := this.zionSdk.GetStorage(utils.SignatureManagerContractAddress, append([]byte(signature_manager.SIG_INFO), id[:]...))
+				if err != nil {
+					return fmt.Errorf("zion.GetStorage error: %v for id: %s at height: %d", err, helper.BytesToHex(id), i)
+				}
+				if len(sigData) == 0 {
+					return fmt.Errorf("id: %s has no sigs at height: %d", helper.BytesToHex(id), i)
+				}
+				sigInfo := &signature_manager.SigInfo{}
+				err = rlp.DecodeBytes(sigData, sigInfo)
+				if err != nil {
+					return fmt.Errorf("rlp.DecodeBytes error: %v for id: %s at height: %d", err, helper.BytesToHex(id), i)
+				}
+				if !sigInfo.Status {
+					return fmt.Errorf("SigInfo.Status is not true for id: %s at height: %d", helper.BytesToHex(id), i)
+				}
+				ss := [][]byte{}
+				for _, s := range sigInfo.SigInfo {
+					ss = append(ss, s.Content)
+				}
+				err = this.syncProofToNeo(i, id, subject, ss)
 				if err != nil {
 					Log.Errorf("--------------------------------------------------")
-					Log.Errorf("[relayToNeo] syncHeaderToNeo error: %s", err)
-					Log.Errorf("polyHeight: %d", i)
+					Log.Errorf("syncProofToNeo error: %v, for id: %s at height: %d", err, helper.BytesToHex(id), i)
 					Log.Errorf("--------------------------------------------------")
 				}
+
 			}
 		}
 
-		this.polyStartHeight++
+		//head, err := this.zionSdk.GetEthClient().HeaderByNumber(context.Background(), big.NewInt(int64(i)))
+		//if err != nil {
+		//	return fmt.Errorf("ethClient.HeaderByNumber error: %s", err)
+		//}
+
+		if this.config.ZionConfig.ChangeEpoch {
+			// sync key header, change epoch,
+			// but should be done after all cross chain tx in this block are handled for verification purpose.
+			header, err := this.zionSdk.GetBlockHeader(i)
+			if err != nil {
+				return fmt.Errorf("GetBlockHeader error: %s", err)
+			}
+
+			err = this.changeEpoch(header)
+			if err != nil {
+				Log.Errorf("--------------------------------------------------")
+				Log.Errorf("changeEpoch error: %s at zion height: %d", err, i)
+				Log.Errorf("--------------------------------------------------")
+			}
+		}
+
+		this.zionStartHeight++
 	}
 	return nil
 }
 
-func (this *SyncService) RelayToNeoCheckAndRetry() {
+func (this *SyncService) ZionToNeoCheck() {
 	for {
 		time.Sleep(time.Duration(this.config.ScanInterval) * time.Second) // 15 seconds a block
 		err := this.neoCheckTx()
 		if err != nil {
-			Log.Errorf("[RelayToNeoCheckAndRetry] this.neoCheckTx error: %s", err)
-		}
-		err = this.neoRetryTx()
-		if err != nil {
-			Log.Errorf("[RelayToNeoCheckAndRetry] this.neoRetryTx error: %s", err)
+			Log.Errorf("[ZionToNeoCheck] neoCheckTx error: %s", err)
 		}
 	}
 }

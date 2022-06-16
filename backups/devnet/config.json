@@ -1,21 +1,23 @@
 {
-  "PolyConfig": {
-    "RpcUrl": "http://138.91.6.226:40336",
-    "ChangeBookkeeper": true
+  "ZionConfig": {
+    "RpcUrl": "http://43.130.238.157:22000",
+    "ChangeEpoch": true
   },
   "NeoConfig": {
     "SideChainID": 220,
     "NeoMagic": 6543221,
     "WalletFile": "./neo3_dev.json",
     "RpcUrl": "http://seed1t.neo.org:21332",
-    "CCMC": "0x7c842f3900ceba5bcdeeeec05c9b41ba63ad6cd2",
+    "CCMC": "0x7c842f3900ceba5bcdeeeec05c9b41ba63ad6cd2"
+  },
+  "CustomConfig": {
     "P2NContract": "",
     "AllowedMethods": [
       "unlock"
     ]
   },
   "ForceConfig": {
-    "PolyStartHeight": 14780176
+    "ZionStartHeight": 0
   },
   "ScanInterval": 15,
   "RetryInterval": 5,

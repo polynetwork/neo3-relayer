@@ -25,12 +25,6 @@ var (
 		Usage: "Password for neo chain wallet",
 		Value: "",
 	}
-
-	RelayPwd = cli.StringFlag{
-		Name:  "relaypwd",
-		Usage: "Password for relay chain wallet",
-		Value: "",
-	}
 )
 
 //GetFlagName deal with short flag, and return the flag name whether flag name have short name

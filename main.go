@@ -5,6 +5,7 @@ import (
 	"github.com/joeqian10/neo3-gogogo/helper"
 	"github.com/joeqian10/neo3-gogogo/rpc"
 	"github.com/joeqian10/neo3-gogogo/wallet"
+	"github.com/polynetwork/neo3-relayer/zion"
 	"github.com/polynetwork/poly/core/types"
 	"golang.org/x/crypto/ssh/terminal"
 	"os"
@@ -26,14 +27,13 @@ var Log = log.Log
 
 func setupApp() *cli.App {
 	app := cli.NewApp()
-	app.Usage = "NEO Relayer"
+	app.Usage = "NEO3 Relayer"
 	app.Action = startSync
-	app.Copyright = "Copyright in 2021 The NEO Project"
+	app.Copyright = "Copyright in 2022 The NEO Project"
 	app.Flags = []cli.Flag{
 		cmd.LogLevelFlag,
 		cmd.ConfigPathFlag,
 		cmd.NeoPwd,
-		cmd.RelayPwd,
 	}
 	app.Commands = []cli.Command{}
 	app.Before = func(context *cli.Context) error {
@@ -60,12 +60,8 @@ func startSync(ctx *cli.Context) {
 
 	neoPwd := ctx.GlobalString(cmd.GetFlagName(cmd.NeoPwd))
 
-	//create poly rpc client
-	polySdk := relaySdk.NewPolySdk()
-	err = SetUpPoly(polySdk, config.DefConfig.PolyConfig.RpcUrl)
-	if err != nil {
-		panic(fmt.Errorf("failed to set up poly: %v", err))
-	}
+	//create zion sdk rpc client
+	zionSdk := zion.NewZionTools(config.DefConfig.ZionConfig.RpcUrl)
 
 	// create a NEO RPC client
 	neoRpcClient := rpc.NewClient(config.DefConfig.NeoConfig.RpcUrl)
@@ -99,7 +95,7 @@ func startSync(ctx *cli.Context) {
 	wh := wallet.NewWalletHelperFromWallet(neoRpcClient, w)
 
 	//Start syncing
-	syncService := service.NewSyncService(polySdk, wh, neoRpcClient)
+	syncService := service.NewSyncService(zionSdk, wh, neoRpcClient)
 	syncService.Run()
 
 	waitToExit()

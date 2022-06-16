@@ -2,25 +2,25 @@ package db
 
 import (
 	"fmt"
-	"github.com/polynetwork/poly/common"
+	"github.com/ethereum/go-ethereum/common"
 )
 
-type Retry struct {
-	Height  uint32
+type Record struct {
+	Height  uint64
 	TxHash  string
 	Id      []byte
 	Subject []byte
 }
 
-func (this *Retry) Serialization(sink *common.ZeroCopySink) {
-	sink.WriteUint32(this.Height)
+func (this *Record) Serialization(sink *common.ZeroCopySink) {
+	sink.WriteUint64(this.Height)
 	sink.WriteString(this.TxHash)
 	sink.WriteVarBytes(this.Id)
 	sink.WriteVarBytes(this.Subject)
 }
 
-func (this *Retry) Deserialization(source *common.ZeroCopySource) error {
-	height, eof := source.NextUint32()
+func (this *Record) Deserialization(source *common.ZeroCopySource) error {
+	height, eof := source.NextUint64()
 	if eof {
 		return fmt.Errorf("waiting deserialize height error")
 	}

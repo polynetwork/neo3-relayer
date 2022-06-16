@@ -6,7 +6,7 @@ import (
 	"github.com/polynetwork/neo3-relayer/config"
 	"github.com/polynetwork/neo3-relayer/db"
 	"github.com/polynetwork/neo3-relayer/log"
-	sdk "github.com/polynetwork/poly-go-sdk"
+	"github.com/polynetwork/neo3-relayer/zion"
 	"os"
 )
 
@@ -14,9 +14,9 @@ var Log = log.Log
 
 // SyncService ...
 type SyncService struct {
-	polySdk         *sdk.PolySdk
-	polyPubKeys     [][]byte
-	polyStartHeight uint32
+	zionSdk         *zion.ZionTools
+	zionPubKeys     [][]byte
+	zionStartHeight uint64
 
 	nwh               *wallet.WalletHelper
 	neoSdk            *rpc.RpcClient
@@ -27,7 +27,7 @@ type SyncService struct {
 }
 
 // NewSyncService ...
-func NewSyncService(polySdk *sdk.PolySdk, neoAccount *wallet.WalletHelper, client *rpc.RpcClient) *SyncService {
+func NewSyncService(zionSdk *zion.ZionTools, neoAccount *wallet.WalletHelper, client *rpc.RpcClient) *SyncService {
 	if !checkIfExist(config.DefConfig.DBPath) {
 		os.Mkdir(config.DefConfig.DBPath, os.ModePerm)
 	}
@@ -37,11 +37,11 @@ func NewSyncService(polySdk *sdk.PolySdk, neoAccount *wallet.WalletHelper, clien
 		os.Exit(1)
 	}
 	am := make(map[string]bool)
-	for _, m := range config.DefConfig.NeoConfig.AllowedMethods {
+	for _, m := range config.DefConfig.CustomConfig.AllowedMethods {
 		am[m] = true
 	}
 	syncSvr := &SyncService{
-		polySdk:           polySdk,
+		zionSdk:           zionSdk,
 		neoSdk:            client,
 		nwh:               neoAccount,
 		neoAllowedMethods: am,
@@ -53,8 +53,8 @@ func NewSyncService(polySdk *sdk.PolySdk, neoAccount *wallet.WalletHelper, clien
 
 // Run ...
 func (this *SyncService) Run() {
-	go this.RelayToNeo()
-	go this.RelayToNeoCheckAndRetry()
+	go this.ZionToNeo()
+	go this.ZionToNeoCheck()
 }
 
 func checkIfExist(dir string) bool {
