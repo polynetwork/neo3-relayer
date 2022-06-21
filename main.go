@@ -5,21 +5,17 @@ import (
 	"github.com/joeqian10/neo3-gogogo/helper"
 	"github.com/joeqian10/neo3-gogogo/rpc"
 	"github.com/joeqian10/neo3-gogogo/wallet"
+	"github.com/polynetwork/neo3-relayer/cmd"
+	"github.com/polynetwork/neo3-relayer/config"
+	"github.com/polynetwork/neo3-relayer/log"
+	"github.com/polynetwork/neo3-relayer/service"
 	"github.com/polynetwork/neo3-relayer/zion"
-	"github.com/polynetwork/poly/core/types"
 	"golang.org/x/crypto/ssh/terminal"
 	"os"
 	"os/signal"
 	"runtime"
 	"syscall"
-	"time"
 
-	"github.com/polynetwork/neo3-relayer/cmd"
-	"github.com/polynetwork/neo3-relayer/config"
-	"github.com/polynetwork/neo3-relayer/log"
-	"github.com/polynetwork/neo3-relayer/service"
-
-	relaySdk "github.com/polynetwork/poly-go-sdk"
 	"github.com/urfave/cli"
 )
 
@@ -58,10 +54,10 @@ func startSync(ctx *cli.Context) {
 		return
 	}
 
-	neoPwd := ctx.GlobalString(cmd.GetFlagName(cmd.NeoPwd))
-
 	//create zion sdk rpc client
 	zionSdk := zion.NewZionTools(config.DefConfig.ZionConfig.RpcUrl)
+
+	neoPwd := ctx.GlobalString(cmd.GetFlagName(cmd.NeoPwd))
 
 	// create a NEO RPC client
 	neoRpcClient := rpc.NewClient(config.DefConfig.NeoConfig.RpcUrl)
@@ -113,30 +109,4 @@ func waitToExit() {
 		}
 	}()
 	<-exit
-}
-
-func SetUpPoly(poly *relaySdk.PolySdk, rpcAddr string) error {
-	poly.NewRpcClient().SetAddress(rpcAddr)
-	c1 := make(chan *types.Header, 1)
-	c2 := make(chan error, 1)
-
-	// use another routine to check time out and error
-	go func() {
-		hdr, err := poly.GetHeaderByHeight(0)
-		if err != nil {
-			c2 <- err
-		}
-		c1 <- hdr
-	}()
-
-	select {
-	case hdr := <- c1:
-		poly.SetChainId(hdr.ChainID)
-	case err := <- c2:
-		return  err
-	case <- time.After(time.Second * 5):
-		return fmt.Errorf("poly rpc port timeout")
-	}
-
-	return nil
 }

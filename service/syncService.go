@@ -64,7 +64,3 @@ func checkIfExist(dir string) bool {
 	}
 	return true
 }
-
-func (this *SyncService) IsAllowedMethod(m string) bool {
-	return this.neoAllowedMethods[m]
-}

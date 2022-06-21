@@ -20,7 +20,7 @@ func (this *SyncService) ZionToNeo() {
 	for {
 		currentZionHeight, err := this.zionSdk.GetNodeHeight()
 		if err != nil {
-			Log.Errorf("[ZionToNeo] GetCurrentBlockHeight error: ", err)
+			Log.Errorf("[ZionToNeo] GetNodeHeight error: ", err)
 		}
 		err = this.zionToNeo(this.zionStartHeight, currentZionHeight)
 		if err != nil {
@@ -32,7 +32,7 @@ func (this *SyncService) ZionToNeo() {
 
 func (this *SyncService) zionToNeo(m, n uint64) error {
 	for i := m; i < n; i++ {
-		Log.Infof("start parse block %d", i)
+		Log.Infof("processing zion block %d", i)
 
 		//----------if use NewCrossChainManager
 		//ccm, err := cross_chain_manager_abi.NewCrossChainManager(utils.CrossChainManagerContractAddress, this.zionSdk.GetEthClient())
@@ -69,7 +69,7 @@ func (this *SyncService) zionToNeo(m, n uint64) error {
 				evt := events.Event
 				// States: []interface{}{"AddSignatureQuorum", id, params.Subject, params.SideChainID},
 				// AddNotify(ABI, []string{signature_manager_abi.EventAddSignatureQuorumEvent}, id, params.Subject, params.SideChainID)
-				if evt.SideChainI.Uint64() != this.config.NeoConfig.SideChainID {
+				if evt.SideChainI.Uint64() != this.config.NeoConfig.SideChainId {
 					continue
 				}
 				id := evt.Id
@@ -99,7 +99,6 @@ func (this *SyncService) zionToNeo(m, n uint64) error {
 					Log.Errorf("syncProofToNeo error: %v, for id: %s at height: %d", err, helper.BytesToHex(id), i)
 					Log.Errorf("--------------------------------------------------")
 				}
-
 			}
 		}
 

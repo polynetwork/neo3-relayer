@@ -29,7 +29,7 @@ type ZionConfig struct {
 }
 
 type NeoConfig struct {
-	SideChainID uint64
+	SideChainId uint64
 	NeoMagic    uint32
 	WalletFile  string
 	RpcUrl      string

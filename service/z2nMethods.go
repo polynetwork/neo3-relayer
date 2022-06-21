@@ -3,7 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
-	goc "crypto"
+	"crypto"
 	"crypto/ecdsa"
 	"encoding/hex"
 	"fmt"
@@ -17,7 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/contracts/native/governance/node_manager"
 	"github.com/ethereum/go-ethereum/contracts/native/utils"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
+	ethCrypto "github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
 
 	crypto3 "github.com/joeqian10/neo3-gogogo/crypto"
@@ -34,6 +34,10 @@ const (
 	CHANGE_BOOK_KEEPER    = "changeEpoch"
 	GET_BOOK_KEEPERS      = "getBookKeepers"
 )
+
+func (this *SyncService) IsAllowedMethod(m string) bool {
+	return this.neoAllowedMethods[m]
+}
 
 // getCurrentNeoChainSyncHeight gets the synced Zion height from Neo CCMC storage
 func (this *SyncService) getCurrentNeoChainSyncHeight() (uint64, error) {
@@ -181,7 +185,7 @@ func (this *SyncService) syncProofToNeo(height uint64, id []byte, subject []byte
 		got := "0x" + helper.BytesToHex(helper.ReverseBytes(toMerkleValue.MakeTxParam.ToContractAddress)) // little endian
 		expected := this.config.CustomConfig.Z2NContract                                       // big endian
 		if got != expected {
-			Log.Infof("this tx is not from the expected contract, expected contract: %s, but got: %s", expected, got)
+			Log.Infof("this tx is not for the expected contract: %s, but got: %s", expected, got)
 			return nil
 		}
 	}
@@ -191,7 +195,7 @@ func (this *SyncService) syncProofToNeo(height uint64, id []byte, subject []byte
 	}
 
 	// check id == sha256.Sum256(subject)
-	hasher := goc.SHA256.New()
+	hasher := crypto.SHA256.New()
 	hasher.Write(subject)
 	digest := hasher.Sum(nil)
 	if bytes.Compare(id, digest) != 0 {
@@ -222,11 +226,13 @@ func (this *SyncService) syncProofToNeo(height uint64, id []byte, subject []byte
 		return fmt.Errorf("sc.MakeScript error: %s", err)
 	}
 
+	// get gas balance from account
 	balancesGas, err := this.nwh.GetAccountAndBalance(tx.GasToken)
 	if err != nil {
 		return fmt.Errorf("WalletHelper.GetAccountAndBalance error: %s", err)
 	}
 
+	// create a db record
 	record := &db.Record{
 		Height:  height,
 		TxHash:  zionHash,
@@ -237,12 +243,13 @@ func (this *SyncService) syncProofToNeo(height uint64, id []byte, subject []byte
 	record.Serialization(sink)
 	v := sink.Bytes()
 
+	// make neo transaction
 	neoTrx, err := this.nwh.MakeTransaction(script, nil, []tx.ITransactionAttribute{}, balancesGas)
 	if err != nil {
 		return fmt.Errorf("WalletHelper.MakeTransaction error: %s", err)
 	}
 
-	// sign transaction
+	// sign the transaction
 	neoTrx, err = this.nwh.SignTransaction(neoTrx, this.config.NeoConfig.NeoMagic)
 	if err != nil {
 		return fmt.Errorf("WalletHelper.SignTransaction error: %s", err)
@@ -374,13 +381,13 @@ func (this *SyncService) getChangingZionValidators(height uint64) ([]byte, error
 	for _, peer := range peers {
 		s := strings.TrimPrefix(peer.PubKey, "0x")
 		keyBytes, _ := hex.DecodeString(s)
-		pubKey, _ := crypto.DecompressPubkey(keyBytes)
+		pubKey, _ := ethCrypto.DecompressPubkey(keyBytes)
 		pubKeyList = append(pubKeyList, pubKey)
 	}
 	bs := []byte{}
 	pubKeyList = sortPublicKeys(pubKeyList)
 	for _, pubKey := range pubKeyList {
-		keyBytes := crypto.CompressPubkey(pubKey)
+		keyBytes := ethCrypto.CompressPubkey(pubKey)
 		bs = append(bs, keyBytes...)
 	}
 	return bs, nil
