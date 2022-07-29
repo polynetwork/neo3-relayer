@@ -2,6 +2,7 @@ package db
 
 // db not used
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"github.com/boltdb/bolt"
@@ -19,6 +20,10 @@ const MAX_NUM = 1000
 var (
 	BKTNeoCheck = []byte("NeoCheck")
 	BKTNeoRetry = []byte("NeoRetry")
+
+	BKTHeight = []byte("Height")
+	NeoHeightKey  = []byte("Neo")
+	ZionHeightKey = []byte("Zion")
 )
 
 type BoltDB struct {
@@ -53,6 +58,16 @@ func NewBoltDB(filePath string) (*BoltDB, error) {
 	// neo retry
 	if err = db.Update(func(btx *bolt.Tx) error {
 		_, err := btx.CreateBucketIfNotExists(BKTNeoRetry)
+		if err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	// height
+	if err = db.Update(func(btx *bolt.Tx) error {
+		_, err := btx.CreateBucketIfNotExists(BKTHeight)
 		if err != nil {
 			return err
 		}
@@ -130,60 +145,76 @@ func (w *BoltDB) GetNeoAllCheck() (map[string][]byte, error) {
 	return checkMap, nil
 }
 
-func (w *BoltDB) PutNeoRetry(k []byte) error {
+func (w *BoltDB) PutNeoHeight(height uint64) error {
 	w.rwLock.Lock()
 	defer w.rwLock.Unlock()
 
-	return w.db.Update(func(btx *bolt.Tx) error {
-		bucket := btx.Bucket(BKTNeoRetry)
-		err := bucket.Put(k, []byte{0x00})
-		if err != nil {
-			return err
-		}
-
-		return nil
-	})
-}
-
-func (w *BoltDB) DeleteNeoRetry(k []byte) error {
-	w.rwLock.Lock()
-	defer w.rwLock.Unlock()
-
+	raw := make([]byte, 8)
+	binary.LittleEndian.PutUint64(raw, height)
 	return w.db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(BKTNeoRetry)
-		err := bucket.Delete(k)
+		bucket := tx.Bucket(BKTHeight)
+		err := bucket.Put(NeoHeightKey, raw)
 		if err != nil {
 			return err
 		}
+
 		return nil
 	})
 }
 
-func (w *BoltDB) GetAllNeoRetry() ([][]byte, error) {
+func (w *BoltDB) GetNeoHeight() uint64 {
+	w.rwLock.RLock()
+	defer w.rwLock.RUnlock()
+
+	var height uint64
+	_ = w.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(BKTHeight)
+		raw := bucket.Get(NeoHeightKey)
+		if len(raw) == 0 {
+			height = 0
+			return nil
+		}
+		height = binary.LittleEndian.Uint64(raw)
+		return nil
+	})
+
+	return height
+}
+
+func (w *BoltDB) PutZionHeight(height uint64) error {
 	w.rwLock.Lock()
 	defer w.rwLock.Unlock()
 
-	retryList := make([][]byte, 0)
-	err := w.db.Update(func(tx *bolt.Tx) error {
-		bw := tx.Bucket(BKTNeoRetry)
-		err := bw.ForEach(func(k, _ []byte) error {
-			_k := make([]byte, len(k))
-			copy(_k, k)
-			retryList = append(retryList, _k)
-			if len(retryList) >= MAX_NUM {
-				return fmt.Errorf("max num")
-			}
-			return nil
-		})
+	raw := make([]byte, 8)
+	binary.LittleEndian.PutUint64(raw, height)
+	return w.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(BKTHeight)
+		err := bucket.Put(ZionHeightKey, raw)
 		if err != nil {
-			Log.Errorf("GetAllRetry err: %s", err)
+			return err
 		}
+
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-	return retryList, nil
+}
+
+func (w *BoltDB) GetZionHeight() uint64 {
+	w.rwLock.RLock()
+	defer w.rwLock.RUnlock()
+
+	var height uint64
+	_ = w.db.View(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(BKTHeight)
+		raw := bucket.Get(ZionHeightKey)
+		if len(raw) == 0 {
+			height = 0
+			return nil
+		}
+		height = binary.LittleEndian.Uint64(raw)
+		return nil
+	})
+
+	return height
 }
 
 func (w *BoltDB) Close() {

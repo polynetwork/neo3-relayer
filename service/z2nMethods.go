@@ -1,9 +1,7 @@
 package service
 
 import (
-	"bytes"
 	"context"
-	"crypto"
 	"crypto/ecdsa"
 	"encoding/hex"
 	"fmt"
@@ -14,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	common2 "github.com/ethereum/go-ethereum/contracts/native/cross_chain_manager/common"
+	"github.com/ethereum/go-ethereum/contracts/native/go_abi/cross_chain_manager_abi"
 	"github.com/ethereum/go-ethereum/contracts/native/governance/node_manager"
 	"github.com/ethereum/go-ethereum/contracts/native/utils"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -37,6 +36,34 @@ const (
 
 func (this *SyncService) IsAllowedMethod(m string) bool {
 	return this.neoAllowedMethods[m]
+}
+
+func (this *SyncService) getCurrentZionHeight() uint64 {
+	errorRecorded := false
+	for {
+		currentZionHeight, err := this.zionSdk.GetNodeHeight()
+		if err != nil {
+			if !errorRecorded {
+				Log.Errorf("zionSdk.GetNodeHeight error: %v, retrying...", err)
+				errorRecorded = true
+			}
+			time.Sleep(10 * time.Second)
+			continue
+		}
+		return currentZionHeight
+	}
+}
+
+func (this *SyncService) getZionStartHeight() uint64 {
+	startHeight := this.config.ForceConfig.ZionStartHeight
+	if startHeight > 0 {
+		return startHeight
+	}
+	startHeight = this.db.GetZionHeight()
+	if startHeight > 0 {
+		return startHeight
+	}
+	return this.getCurrentZionHeight()
 }
 
 // getCurrentNeoChainSyncHeight gets the synced Zion height from Neo CCMC storage
@@ -63,6 +90,7 @@ func (this *SyncService) getCurrentNeoChainSyncHeight() (uint64, error) {
 	return height, nil
 }
 
+// deprecated
 // changeEpoch inside needs four parameters: rawHeader, rawHeaderHash, newPubKeyList, signList []byte
 func (this *SyncService) changeEpoch(header *types.Header) error {
 	extra, err := types.ExtractHotstuffExtra(header)
@@ -130,17 +158,17 @@ func (this *SyncService) changeEpoch(header *types.Header) error {
 	Log.Infof("script: " + crypto3.Base64Encode(script))
 
 	// make transaction
-	balancesGas, err := this.nwh.GetAccountAndBalance(tx.GasToken)
+	balancesGas, err := this.neoWalletHelper.GetAccountAndBalance(tx.GasToken)
 	if err != nil {
 		return fmt.Errorf("[changeBookKeeper] WalletHelper.GetAccountAndBalance error: %s", err)
 	}
-	trx, err := this.nwh.MakeTransaction(script, nil, []tx.ITransactionAttribute{}, balancesGas)
+	trx, err := this.neoWalletHelper.MakeTransaction(script, nil, []tx.ITransactionAttribute{}, balancesGas)
 	if err != nil {
 		return fmt.Errorf("[changeBookKeeper] WalletHelper.MakeTransaction error: %s", err)
 	}
 
 	// sign transaction
-	trx, err = this.nwh.SignTransaction(trx, this.config.NeoConfig.NeoMagic)
+	trx, err = this.neoWalletHelper.SignTransaction(trx, this.config.NeoConfig.NeoMagic)
 	if err != nil {
 		return fmt.Errorf("[changeBookKeeper] WalletHelper.SignTransaction error: %s", err)
 	}
@@ -171,111 +199,119 @@ func (this *SyncService) changeEpoch(header *types.Header) error {
 	return nil
 }
 
-func (this *SyncService) syncProofToNeo(height uint64, id []byte, subject []byte, sigData [][]byte) error {
-	// rlp.Decode
-	toMerkleValue := new(common2.ToMerkleValue)
-	r:= bytes.NewReader(subject)
-	stream := rlp.NewStream(r, uint64(len(subject)))
-	err := toMerkleValue.DecodeRLP(stream)
+func (this *SyncService) processZionTx(evt *cross_chain_manager_abi.CrossChainManagerMakeProof, height uint64) error {
+	if evt.Raw.Address != this.zionCcmAddr {
+		Log.Warnf("event source contract invalid: %s, expect: %s, height: %d",
+			evt.Raw.Address.Hex(), this.zionCcmAddr.Hex(), height)
+		return nil
+	}
 
-	zionHash := helper.BytesToHex(toMerkleValue.TxHash)
-
-	// check if it is zion to neo contract
+	tmv := new(common2.ToMerkleValue)
+	value, err := hex.DecodeString(evt.MerkleValueHex)
+	if err != nil {
+		return fmt.Errorf("decode MerkleValueHex error: %v", err)
+	}
+	err = rlp.DecodeBytes(value, tmv)
+	if err != nil {
+		return fmt.Errorf("rlp.DecodeBytes error: %v", err)
+	}
+	// check toChainId
+	if tmv.MakeTxParam.ToChainID != this.config.NeoConfig.SideChainId {
+		return nil
+	}
+	// check Z2NContract
 	if this.config.CustomConfig.Z2NContract != "" {
-		got := "0x" + helper.BytesToHex(helper.ReverseBytes(toMerkleValue.MakeTxParam.ToContractAddress)) // little endian
-		expected := this.config.CustomConfig.Z2NContract                                       // big endian
+		got := "0x" + helper.BytesToHex(helper.ReverseBytes(tmv.MakeTxParam.ToContractAddress)) // little endian
+		expected := this.config.CustomConfig.Z2NContract                                        // big endian
 		if got != expected {
 			Log.Infof("this tx is not for the expected contract: %s, but got: %s", expected, got)
 			return nil
 		}
 	}
-
-	if this.IsAllowedMethod(toMerkleValue.MakeTxParam.Method) {
-		return fmt.Errorf("called method %s is invalid", toMerkleValue.MakeTxParam.Method)
+	// check allowed methods
+	if this.IsAllowedMethod(tmv.MakeTxParam.Method) {
+		return fmt.Errorf("called method %s is invalid", tmv.MakeTxParam.Method)
 	}
 
-	// check id == sha256.Sum256(subject)
-	hasher := crypto.SHA256.New()
-	hasher.Write(subject)
-	digest := hasher.Sum(nil)
-	if bytes.Compare(id, digest) != 0 {
-		return fmt.Errorf("incorrect id: %s for toMerkleValue: %s", helper.BytesToHex(id), helper.BytesToHex(subject))
+	// sign the toMerkleValue
+	sig, err := this.neoKeyPair.Sign(value)
+	if err != nil {
+		return fmt.Errorf("KeyPair.Sign error: %v", err)
 	}
+
+	err = this.syncProofToNeo(height, tmv, value, sig)
+	if err != nil {
+		return fmt.Errorf("syncProofToNeo error: %v", err)
+	}
+	return nil
+}
+
+// syncProofToNeo
+func (this *SyncService) syncProofToNeo(height uint64, tmv *common2.ToMerkleValue, toMerkleValue []byte, sig []byte) error {
+	// make ContractParameter
 	crossInfo := sc.ContractParameter{
 		Type:  sc.ByteArray,
-		Value: subject,
+		Value: toMerkleValue,
 	}
-
-	// sort sigs
-	signListBytes, err := this.sortSignatures(sigData, digest)
-	if err != nil {
-		return fmt.Errorf("sort signatures error: %s", err)
-	}
-	signList := sc.ContractParameter{
+	sigInfo := sc.ContractParameter{
 		Type:  sc.ByteArray,
-		Value: signListBytes,
+		Value: sig,
 	}
-
 	// build script
 	scriptHash, err := helper.UInt160FromString(this.config.NeoConfig.CCMC)
 	if err != nil {
 		return fmt.Errorf("neo ccmc conversion error: %s", err)
 	}
-	script, err := sc.MakeScript(scriptHash, VERIFY_AND_EXECUTE_TX, []interface{}{crossInfo, signList})
+	script, err := sc.MakeScript(scriptHash, VERIFY_AND_EXECUTE_TX, []interface{}{crossInfo, sigInfo})
 	if err != nil {
 		return fmt.Errorf("sc.MakeScript error: %s", err)
 	}
-
 	// get gas balance from account
-	balancesGas, err := this.nwh.GetAccountAndBalance(tx.GasToken)
+	balancesGas, err := this.neoWalletHelper.GetAccountAndBalance(tx.GasToken)
 	if err != nil {
 		return fmt.Errorf("WalletHelper.GetAccountAndBalance error: %s", err)
 	}
-
-	// create a db record
-	record := &db.Record{
-		Height:  height,
-		TxHash:  zionHash,
-		Id:      id,
-		Subject: subject,
-	}
-	sink := common.NewZeroCopySink(nil)
-	record.Serialization(sink)
-	v := sink.Bytes()
-
 	// make neo transaction
-	neoTrx, err := this.nwh.MakeTransaction(script, nil, []tx.ITransactionAttribute{}, balancesGas)
+	neoTrx, err := this.neoWalletHelper.MakeTransaction(script, nil, []tx.ITransactionAttribute{}, balancesGas)
 	if err != nil {
 		return fmt.Errorf("WalletHelper.MakeTransaction error: %s", err)
 	}
-
 	// sign the transaction
-	neoTrx, err = this.nwh.SignTransaction(neoTrx, this.config.NeoConfig.NeoMagic)
+	neoTrx, err = this.neoWalletHelper.SignTransaction(neoTrx, this.config.NeoConfig.NeoMagic)
 	if err != nil {
 		return fmt.Errorf("WalletHelper.SignTransaction error: %s", err)
 	}
 	rawTxString := crypto3.Base64Encode(neoTrx.ToByteArray())
-
 	// send the raw transaction
 	response := this.neoSdk.SendRawTransaction(rawTxString)
 	if response.HasError() {
 		return fmt.Errorf("SendRawTransaction error: %s, "+
 			"height: %d, "+
-			"id: %s, " +
-			"cross chain info: %s, " +
-			"signatures: %s, " +
+			"cross chain info: %s, "+
+			"signature: %s, "+
 			"script hex string: %s, "+
 			"raw tx string: %s",
 			response.GetErrorInfo(),
 			height,
-			helper.BytesToHex(id),
-			helper.BytesToHex(subject),
-			helper.BytesToHex(signListBytes),
+			helper.BytesToHex(toMerkleValue),
+			helper.BytesToHex(sig),
 			helper.BytesToHex(script),
 			rawTxString)
 	}
 	neoHash := neoTrx.GetHash().String()
-	Log.Infof("syncProofToNeo txHash is: %s", neoHash)
+	zionHash := helper.BytesToHex(tmv.TxHash)
+	Log.Infof("syncProofToNeo txHash: %s, zionHash: %s", neoHash, zionHash)
+
+	// create a db record
+	record := &db.NeoRecord{
+		Height:        height,
+		TxHash:        zionHash,
+		ToMerkleValue: toMerkleValue,
+	}
+	sink := common.NewZeroCopySink(nil)
+	record.Serialization(sink)
+	v := sink.Bytes()
+	// put into check
 	err = this.db.PutNeoCheck(neoHash, v)
 	if err != nil {
 		return fmt.Errorf("this.db.PutNeoCheck error: %s", err)
@@ -289,7 +325,7 @@ func (this *SyncService) neoCheckTx() error {
 		return fmt.Errorf("this.db.GetNeoAllCheck error: %s", err)
 	}
 	for k, v := range checkMap {
-		record := new(db.Record)
+		record := new(db.NeoRecord)
 		err := record.Deserialization(common.NewZeroCopySource(v))
 		if err != nil {
 			return fmt.Errorf("record.Deserialization error: %s", err)
@@ -316,7 +352,7 @@ func (this *SyncService) neoCheckTx() error {
 		}
 		exec := appLog.Executions[0]
 		if exec.VMState == "FAULT" {
-			Log.Errorf("tx engine faulted, neoHash: %s, zionHash: %s at height %d, exception: %s", k, record.TxHash, record.Height, exec.Exception)
+			Log.Errorf("tx engine faulted, neoHash: %s, zionHash: %s at height: %d, exception: %s", k, record.TxHash, record.Height, exec.Exception)
 			continue
 		}
 		if len(exec.Stack) < 1 {
@@ -329,12 +365,12 @@ func (this *SyncService) neoCheckTx() error {
 			if b == false {
 				notifications := exec.Notifications
 				if !appLogNotificationContains(notifications, this.config.NeoConfig.CCMC, "Transaction has been executed") { // if executed, skip
-					Log.Errorf("tx stack result is false, neoHash: %s, zionHash: %s at height %d, check app log details and record", k, record.TxHash, record.Height)
+					Log.Errorf("tx stack result is false, neoHash: %s, zionHash: %s at height: %d, check app log details and record", k, record.TxHash, record.Height)
 				}
 				continue
 			}
 		}
-		Log.Infof("tx is successful, hash: %s, zionHash: %s at height %d", k, record.TxHash, record.Height)
+		Log.Infof("tx is successful, hash: %s, zionHash: %s at height: %d", k, record.TxHash, record.Height)
 	}
 	return nil
 }

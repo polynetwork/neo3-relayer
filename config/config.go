@@ -14,35 +14,39 @@ const (
 
 //Config object
 type Config struct {
-	ZionConfig    ZionConfig
-	NeoConfig     NeoConfig
-	CustomConfig  CustomConfig
-	ForceConfig   ForceConfig
-	ScanInterval  uint64
-	RetryInterval uint64
-	DBPath        string
+	ZionConfig   ZionConfig
+	NeoConfig    NeoConfig
+	CustomConfig CustomConfig
+	ForceConfig  ForceConfig
+	ScanInterval uint64
+	BoltDbPath   string
 }
 
 type ZionConfig struct {
 	RpcUrl      string
+	ECCMAddress string
+	NodeKey     string
 	ChangeEpoch bool
 }
 
 type NeoConfig struct {
 	SideChainId uint64
 	NeoMagic    uint32
-	WalletFile  string
 	RpcUrl      string
 	CCMC        string // big endian string, like 0x1234567812345678123456781234567812345678
+	WalletFile  string
+	WalletPwd   string
 }
 
 // CustomConfig - following configs are for general-purpose neo3 relayer
 type CustomConfig struct {
+	N2ZContract    string // neo to zion contract, big endian string
 	Z2NContract    string // zion to neo contract
 	AllowedMethods []string
 }
 
 type ForceConfig struct {
+	NeoStartHeight  uint64
 	ZionStartHeight uint64
 }
 

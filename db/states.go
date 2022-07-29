@@ -5,21 +5,19 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-type Record struct {
+type NeoRecord struct {
 	Height  uint64
-	TxHash  string
-	Id      []byte
-	Subject []byte
+	TxHash        string
+	ToMerkleValue []byte
 }
 
-func (this *Record) Serialization(sink *common.ZeroCopySink) {
+func (this *NeoRecord) Serialization(sink *common.ZeroCopySink) {
 	sink.WriteUint64(this.Height)
 	sink.WriteString(this.TxHash)
-	sink.WriteVarBytes(this.Id)
-	sink.WriteVarBytes(this.Subject)
+	sink.WriteVarBytes(this.ToMerkleValue)
 }
 
-func (this *Record) Deserialization(source *common.ZeroCopySource) error {
+func (this *NeoRecord) Deserialization(source *common.ZeroCopySource) error {
 	height, eof := source.NextUint64()
 	if eof {
 		return fmt.Errorf("waiting deserialize height error")
@@ -28,10 +26,6 @@ func (this *Record) Deserialization(source *common.ZeroCopySource) error {
 	if eof {
 		return fmt.Errorf("waiting deserialize txHash error")
 	}
-	id, eof := source.NextVarBytes()
-	if eof {
-		return fmt.Errorf("waiting deserialize id error")
-	}
 	subject, eof := source.NextVarBytes()
 	if eof {
 		return fmt.Errorf("waiting deserialize subject error")
@@ -39,8 +33,7 @@ func (this *Record) Deserialization(source *common.ZeroCopySource) error {
 
 	this.Height = height
 	this.TxHash = txHash
-	this.Id = id
-	this.Subject = subject
+	this.ToMerkleValue = subject
 
 	return nil
 }

@@ -2,14 +2,10 @@ package main
 
 import (
 	"fmt"
-	"github.com/joeqian10/neo3-gogogo/helper"
-	"github.com/joeqian10/neo3-gogogo/rpc"
-	"github.com/joeqian10/neo3-gogogo/wallet"
 	"github.com/polynetwork/neo3-relayer/cmd"
 	"github.com/polynetwork/neo3-relayer/config"
 	"github.com/polynetwork/neo3-relayer/log"
 	"github.com/polynetwork/neo3-relayer/service"
-	"github.com/polynetwork/neo3-relayer/zion"
 	"golang.org/x/crypto/ssh/terminal"
 	"os"
 	"os/signal"
@@ -53,46 +49,25 @@ func startSync(ctx *cli.Context) {
 		fmt.Println("DefConfig.Init error: ", err)
 		return
 	}
-
-	//create zion sdk rpc client
-	zionSdk := zion.NewZionTools(config.DefConfig.ZionConfig.RpcUrl)
-
-	neoPwd := ctx.GlobalString(cmd.GetFlagName(cmd.NeoPwd))
-
-	// create a NEO RPC client
-	neoRpcClient := rpc.NewClient(config.DefConfig.NeoConfig.RpcUrl)
-
-	// open the NEO wallet
-	ps := helper.ProtocolSettings{
-		Magic:          config.DefConfig.NeoConfig.NeoMagic,
-		AddressVersion: helper.DefaultAddressVersion,
+	// get neo pwd
+	neoPwd := config.DefConfig.NeoConfig.WalletPwd
+	if neoPwd == "" {
+		neoPwd = ctx.GlobalString(cmd.GetFlagName(cmd.NeoPwd))
 	}
-	w, err := wallet.NewNEP6Wallet(config.DefConfig.NeoConfig.WalletFile, &ps, nil, nil)
-	if err != nil {
-		Log.Errorf("[NEO Relayer] Failed to open NEO wallet: %s", err)
-		return
-	}
-
 	if neoPwd == "" {
 		fmt.Println()
 		fmt.Printf("Neo Wallet Password:")
 		pwd, err := terminal.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {
-			Log.Errorf("[NEO Relayer] Invalid password entered")
+			Log.Errorf("[NEO Relayer] invalid password entered")
 		}
 		neoPwd = string(pwd)
 		fmt.Println()
 	}
-	err = w.Unlock(neoPwd)
-	if err != nil {
-		Log.Errorf("[NEO Relayer] Failed to decrypt NEO account")
-		return
-	}
-	wh := wallet.NewWalletHelperFromWallet(neoRpcClient, w)
+	config.DefConfig.NeoConfig.WalletPwd = neoPwd
 
-	//Start syncing
-	syncService := service.NewSyncService(zionSdk, wh, neoRpcClient)
-	syncService.Run()
+	// create SyncService
+	service.NewSyncService(config.DefConfig).Start()
 
 	waitToExit()
 }

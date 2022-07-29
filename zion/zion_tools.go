@@ -103,7 +103,7 @@ func NewZionTools(url string) *ZionTools {
 	rpcClient, _ := rpc.Dial(url)
 	ec, err := ethclient.Dial(url)
 	if err != nil {
-		panic(fmt.Errorf("NewZionTools: cannot dial sync node, err: %v", err))
+		panic(any(fmt.Errorf("NewZionTools: cannot dial sync node, err: %v", err)))
 	}
 	rc := NewRestClient()
 	rc.SetAddr(url)
