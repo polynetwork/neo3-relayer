@@ -55,7 +55,7 @@ func NewSyncService(cfg *config.Config) *SyncService {
 	}
 	s.zionChainId = chainId
 
-	// create a zion signer
+	// create a zion signer, todo
 	signer, err := zion.NewZionSigner(cfg.ZionConfig.NodeKey)
 	if err != nil {
 		panic(any(err))

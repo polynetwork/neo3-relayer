@@ -54,12 +54,13 @@ func startSync(ctx *cli.Context) {
 	if neoPwd == "" {
 		neoPwd = ctx.GlobalString(cmd.GetFlagName(cmd.NeoPwd))
 	}
-	if neoPwd == "" {
+	for neoPwd == "" {
 		fmt.Println()
-		fmt.Printf("Neo Wallet Password:")
+		fmt.Printf("please enter neo wallet password:")
 		pwd, err := terminal.ReadPassword(int(os.Stdin.Fd()))
 		if err != nil {
-			Log.Errorf("[NEO Relayer] invalid password entered")
+			Log.Errorf("invalid password entered")
+			continue
 		}
 		neoPwd = string(pwd)
 		fmt.Println()
@@ -78,7 +79,7 @@ func waitToExit() {
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		for sig := range sc {
-			Log.Infof("Neo Relayer received exit signal: %v.", sig.String())
+			Log.Infof("neo relayer received exit signal: %v.", sig.String())
 			close(exit)
 			break
 		}
