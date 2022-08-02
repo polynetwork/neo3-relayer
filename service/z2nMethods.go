@@ -233,13 +233,7 @@ func (this *SyncService) processZionTx(evt *cross_chain_manager_abi.CrossChainMa
 		return fmt.Errorf("called method %s is invalid", tmv.MakeTxParam.Method)
 	}
 
-	// sign the toMerkleValue
-	sig, err := this.neoKeyPair.Sign(value)
-	if err != nil {
-		return fmt.Errorf("KeyPair.Sign error: %v", err)
-	}
-
-	err = this.syncProofToNeo(height, tmv, value, sig)
+	err = this.syncProofToNeo(height, tmv)
 	if err != nil {
 		return fmt.Errorf("syncProofToNeo error: %v", err)
 	}
@@ -247,11 +241,36 @@ func (this *SyncService) processZionTx(evt *cross_chain_manager_abi.CrossChainMa
 }
 
 // syncProofToNeo
-func (this *SyncService) syncProofToNeo(height uint64, tmv *common2.ToMerkleValue, toMerkleValue []byte, sig []byte) error {
+func (this *SyncService) syncProofToNeo(height uint64, ethTmv *common2.ToMerkleValue) error {
+	// convert to neo ToMerkleValue
+	neoTmv := &ToMerkleValue{
+		TxHash:      ethTmv.TxHash,
+		FromChainID: ethTmv.FromChainID,
+		TxParam: &CrossChainTxParameter{
+			TxHash:       ethTmv.MakeTxParam.TxHash,
+			CrossChainID: ethTmv.MakeTxParam.CrossChainID,
+			FromContract: ethTmv.MakeTxParam.FromContractAddress,
+			ToChainID:    ethTmv.MakeTxParam.ToChainID,
+			ToContract:   ethTmv.MakeTxParam.ToContractAddress,
+			Method:       []byte(ethTmv.MakeTxParam.Method),
+			Args:         ethTmv.MakeTxParam.Args,
+		},
+	}
+
+	rawNeoTmv, err := SerializeMerkleValue(neoTmv)
+	if err != nil {
+		return fmt.Errorf("SerializeMerkleValue error: %s", err)
+	}
+	// sign the toMerkleValue
+	sig, err := this.neoKeyPair.Sign(rawNeoTmv)
+	if err != nil {
+		return fmt.Errorf("KeyPair.Sign error: %v", err)
+	}
+
 	// make ContractParameter
 	crossInfo := sc.ContractParameter{
 		Type:  sc.ByteArray,
-		Value: toMerkleValue,
+		Value: rawNeoTmv,
 	}
 	sigInfo := sc.ContractParameter{
 		Type:  sc.ByteArray,
@@ -293,20 +312,20 @@ func (this *SyncService) syncProofToNeo(height uint64, tmv *common2.ToMerkleValu
 			"raw tx string: %s",
 			response.GetErrorInfo(),
 			height,
-			helper.BytesToHex(toMerkleValue),
+			helper.BytesToHex(rawNeoTmv),
 			helper.BytesToHex(sig),
 			helper.BytesToHex(script),
 			rawTxString)
 	}
 	neoHash := neoTrx.GetHash().String()
-	zionHash := helper.BytesToHex(tmv.TxHash)
+	zionHash := helper.BytesToHex(ethTmv.TxHash)
 	Log.Infof("syncProofToNeo txHash: %s, zionHash: %s", neoHash, zionHash)
 
 	// create a db record
 	record := &db.NeoRecord{
 		Height:        height,
 		TxHash:        zionHash,
-		ToMerkleValue: toMerkleValue,
+		ToMerkleValue: rawNeoTmv,
 	}
 	sink := common.NewZeroCopySink(nil)
 	record.Serialization(sink)

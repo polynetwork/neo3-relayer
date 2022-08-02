@@ -1,7 +1,7 @@
 package service
 
 import (
-	"github.com/joeqian10/neo-gogogo/helper"
+	"github.com/joeqian10/neo3-gogogo/helper"
 	"gotest.tools/assert"
 	"testing"
 )

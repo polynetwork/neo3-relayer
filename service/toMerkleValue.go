@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"github.com/joeqian10/neo3-gogogo/crypto"
 	"github.com/joeqian10/neo3-gogogo/helper"
+	"github.com/joeqian10/neo3-gogogo/io"
 	"math/big"
-	"strconv"
 )
 
 type ToMerkleValue struct {
@@ -16,15 +16,85 @@ type ToMerkleValue struct {
 	TxParam     *CrossChainTxParameter
 }
 
+func (this *ToMerkleValue) Deserialize(br *io.BinaryReader) {
+	this.TxHash = br.ReadVarBytes()
+	br.ReadLE(&this.FromChainID)
+	this.TxParam = new(CrossChainTxParameter)
+	this.TxParam.Deserialize(br)
+}
+
+func (this *ToMerkleValue) Serialize(bw *io.BinaryWriter) {
+	bw.WriteVarBytes(this.TxHash)
+	bw.WriteLE(this.FromChainID)
+	this.TxParam.Serialize(bw)
+}
+
 type CrossChainTxParameter struct {
 	TxHash       []byte // source chain tx hash, when FromChainID = 2 (eth), it's a key
 	CrossChainID []byte
 	FromContract []byte
+	ToChainID    uint64
+	ToContract   []byte
+	Method       []byte
+	Args         []byte
+}
 
-	ToChainID  uint64
-	ToContract []byte
-	Method     []byte
-	Args       []byte
+func (this *CrossChainTxParameter) Deserialize(br *io.BinaryReader) {
+	this.TxHash = br.ReadVarBytes()
+	this.CrossChainID = br.ReadVarBytes()
+	this.FromContract = br.ReadVarBytes()
+	br.ReadLE(&this.ToChainID)
+	this.ToContract = br.ReadVarBytes()
+	this.Method = br.ReadVarBytes()
+	this.Args = br.ReadVarBytes()
+}
+
+func (this *CrossChainTxParameter) Serialize(bw *io.BinaryWriter) {
+	bw.WriteVarBytes(this.TxHash)
+	bw.WriteVarBytes(this.CrossChainID)
+	bw.WriteVarBytes(this.FromContract)
+	bw.WriteLE(this.ToChainID)
+	bw.WriteVarBytes(this.ToContract)
+	bw.WriteVarBytes(this.Method)
+	bw.WriteVarBytes(this.Args)
+}
+
+func DeserializeMerkleValue(source []byte) (*ToMerkleValue, error) {
+	tmv := new(ToMerkleValue)
+	br := io.NewBinaryReaderFromBuf(source)
+	tmv.Deserialize(br)
+	if br.Err != nil {
+		return nil, br.Err
+	}
+	return tmv, nil
+}
+
+func SerializeMerkleValue(tmv *ToMerkleValue) ([]byte, error) {
+	bbw := io.NewBufBinaryWriter()
+	tmv.Serialize(bbw.BinaryWriter)
+	if bbw.Err != nil {
+		return nil, bbw.Err
+	}
+	return bbw.Bytes(), nil
+}
+
+func DeserializeCrossChainTxParameter(source []byte) (*CrossChainTxParameter, error) {
+	cctp := new(CrossChainTxParameter)
+	br := io.NewBinaryReaderFromBuf(source)
+	cctp.Deserialize(br)
+	if br.Err != nil {
+		return nil, br.Err
+	}
+	return cctp, nil
+}
+
+func SerializeCrossChainTxParameter(cctp *CrossChainTxParameter) ([]byte, error) {
+	bbw := io.NewBufBinaryWriter()
+	cctp.Serialize(bbw.BinaryWriter)
+	if bbw.Err != nil {
+		return nil, bbw.Err
+	}
+	return bbw.Bytes(), nil
 }
 
 func DeserializeArgs(source []byte) ([]byte, []byte, *big.Int, error) {
@@ -48,71 +118,9 @@ func DeserializeArgs(source []byte) ([]byte, []byte, *big.Int, error) {
 	return assetHash, toAddress, toAmount, nil
 }
 
-func DeserializeMerkleValue(source []byte) (*ToMerkleValue, error) {
-	result := ToMerkleValue{}
-	offset := 0
-	var err error
-	// get TxHash
-	result.TxHash, offset, err = ReadVarBytes(source, offset)
-	if err != nil {
-		return nil, err
-	}
-	// get FromChainID
-	result.FromChainID, offset, err = ReadVarUInt64(source, offset)
-	if err != nil {
-		return nil, err
-	}
-	// get CrossChainTxParameter
-	result.TxParam, err = DeserializeCrossChainTxParameter(source, offset)
-	if err != nil {
-		return nil, err
-	}
+// below is for MerkleProve
 
-	return &result, nil
-}
-
-func DeserializeCrossChainTxParameter(source []byte, offset int) (*CrossChainTxParameter, error) {
-	result := CrossChainTxParameter{}
-	var err error
-	// get TxHash
-	result.TxHash, offset, err = ReadVarBytes(source, offset)
-	if err != nil {
-		return nil, err
-	}
-	// get CrossChainID
-	result.CrossChainID, offset, err = ReadVarBytes(source, offset)
-	if err != nil {
-		return nil, err
-	}
-	// get FromContract
-	result.FromContract, offset, err = ReadVarBytes(source, offset)
-	if err != nil {
-		return nil, err
-	}
-	// get ToChainID
-	result.ToChainID, offset, err = ReadVarUInt64(source, offset)
-	if err != nil {
-		return nil, err
-	}
-	// get ToContract
-	result.ToContract, offset, err = ReadVarBytes(source, offset)
-	if err != nil {
-		return nil, err
-	}
-	// get Method
-	result.Method, offset, err = ReadVarBytes(source, offset)
-	if err != nil {
-		return nil, err
-	}
-	// get Params
-	result.Args, offset, err = ReadVarBytes(source, offset)
-	if err != nil {
-		return nil, err
-	}
-
-	return &result, nil
-}
-
+// MerkleProve ...
 func MerkleProve(path, root []byte) ([]byte, error) {
 	offset := 0
 	value, offset, err := ReadVarBytes(path, offset)
@@ -224,12 +232,4 @@ func ReadUInt255(buffer []byte, offset int) (*big.Int, int, error) {
 	}
 	res := helper.BigIntFromNeoBytes(buffer[offset : offset+32])
 	return res, offset + 32, nil
-}
-
-func stringToInteger(s string) (int, error) {
-	if len(s) == 0 {
-		return 0, nil
-	} else {
-		return strconv.Atoi(s)
-	}
 }

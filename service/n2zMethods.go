@@ -252,7 +252,7 @@ func (this *SyncService) syncProofToZion(key string, height uint64, neoHash stri
 	if err != nil {
 		return fmt.Errorf("VerifyProof error: %s", err)
 	}
-	cctp, err := DeserializeCrossChainTxParameter(value, 0)
+	cctp, err := DeserializeCrossChainTxParameter(value)
 	if err != nil {
 		return fmt.Errorf("DeserializeCrossChainTxParameter error: %s", err)
 	}
@@ -370,7 +370,7 @@ func (this *SyncService) makeZionTx(contractAddress common.Address, contractAbi 
 	return zionHash, nil
 }
 
-func (this *SyncService) waitZionTx(txHash string) (err error) {
+func (this *SyncService) waitZionTx(txHash string) error {
 	start := time.Now()
 	for {
 		duration := time.Second * 30
@@ -380,11 +380,11 @@ func (this *SyncService) waitZionTx(txHash string) (err error) {
 		if receipt == nil || err != nil {
 			if time.Since(start) > time.Minute*5 {
 				err = fmt.Errorf("waitTx timeout")
-				return
+				return err
 			}
 			time.Sleep(time.Second)
 			continue
 		}
-		return
+		return nil
 	}
 }

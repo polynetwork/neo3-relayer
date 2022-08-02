@@ -1,20 +1,17 @@
 package service
 
 import (
+	"bytes"
 	goc "crypto"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/ethereum/go-ethereum/contracts/native/cross_chain_manager/common"
+	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/joeqian10/neo3-gogogo/crypto"
 	"github.com/joeqian10/neo3-gogogo/helper"
 	"github.com/joeqian10/neo3-gogogo/rpc"
 	"github.com/joeqian10/neo3-gogogo/rpc/models"
 	"github.com/joeqian10/neo3-gogogo/sc"
-	"github.com/ontio/ontology-crypto/keypair"
-	relaySdk "github.com/polynetwork/poly-go-sdk"
-	vconfig "github.com/polynetwork/poly/consensus/vbft/config"
-	"github.com/polynetwork/poly/core/types"
 	"github.com/stretchr/testify/assert"
 	"log"
 	"strconv"
@@ -180,26 +177,61 @@ func Test666(t *testing.T)  {
 	log.Println(index)
 }
 
-func Test777(t *testing.T) {
-	polyRpc := "http://beta1.poly.network:20336"
-	rc := relaySdk.NewPolySdk()
-	rc.NewRpcClient().SetAddress(polyRpc)
+func TestConvertNeoTmvToEthTmv(t *testing.T)  {
+	rawNeoTmv := helper.HexToBytes("204ce9a62083b29dd888394c124fc57f0b8533171ed3f869dd350b0375d8027c00020000000000000020000000000000000000000000000000000000000000000000000000000000e269204df8f0fc252d2bd3f21c474510fed914cf5fb5ba98510ddfe83b3d6d5a3715ff14250e76987d838a75310c34bf422ea9f1ac4cc9060e0000000000000014cb569453781497dcb067b73d95b28802cb01553806756e6c6f636b4a149328aec1e84c93855e2fb4a01f5eb7ec15e1abd614e9cdc1efd22c74b5706f0068f79b69b46fa85a0d2035f50500000000000000000000000000000000000000000000000000000000")
+	neoTmv, err := DeserializeMerkleValue(rawNeoTmv)
+	assert.Nil(t, err)
+	ethTmv := &common.ToMerkleValue{
+		TxHash:      neoTmv.TxHash,
+		FromChainID: neoTmv.FromChainID,
+		MakeTxParam: &common.MakeTxParam{
+			TxHash:              neoTmv.TxParam.TxHash,
+			CrossChainID:        neoTmv.TxParam.CrossChainID,
+			FromContractAddress: neoTmv.TxParam.FromContract,
+			ToChainID:           neoTmv.TxParam.ToChainID,
+			ToContractAddress:   neoTmv.TxParam.ToContract,
+			Method:              string(neoTmv.TxParam.Method),
+			Args:                neoTmv.TxParam.Args,
+		},
+	}
 
-	block, err := rc.GetBlockByHeight(60000)
+	b := new(bytes.Buffer)
+	err = ethTmv.EncodeRLP(b)
+	assert.Nil(t, err)
+	rawEthTmv := b.Bytes()
+	fmt.Println(helper.BytesToHex(rawEthTmv))
+	assert.Equal(t, "f8e4a04ce9a62083b29dd888394c124fc57f0b8533171ed3f869dd350b0375d8027c0002f8c0a0000000000000000000000000000000000000000000000000000000000000e269a04df8f0fc252d2bd3f21c474510fed914cf5fb5ba98510ddfe83b3d6d5a3715ff94250e76987d838a75310c34bf422ea9f1ac4cc9060e94cb569453781497dcb067b73d95b28802cb01553886756e6c6f636bb84a149328aec1e84c93855e2fb4a01f5eb7ec15e1abd614e9cdc1efd22c74b5706f0068f79b69b46fa85a0d2035f50500000000000000000000000000000000000000000000000000000000",
+		helper.BytesToHex(rawEthTmv))
+}
+
+func TestConvertEthTmvToNeoTmv(t *testing.T)  {
+	rawEthTmv := helper.HexToBytes("f8e4a04ce9a62083b29dd888394c124fc57f0b8533171ed3f869dd350b0375d8027c0002f8c0a0000000000000000000000000000000000000000000000000000000000000e269a04df8f0fc252d2bd3f21c474510fed914cf5fb5ba98510ddfe83b3d6d5a3715ff94250e76987d838a75310c34bf422ea9f1ac4cc9060e94cb569453781497dcb067b73d95b28802cb01553886756e6c6f636bb84a149328aec1e84c93855e2fb4a01f5eb7ec15e1abd614e9cdc1efd22c74b5706f0068f79b69b46fa85a0d2035f50500000000000000000000000000000000000000000000000000000000")
+	ethTmv := new(common.ToMerkleValue)
+	err := rlp.DecodeBytes(rawEthTmv, ethTmv)
 	assert.Nil(t, err)
 
-	blkInfo := &vconfig.VbftBlockInfo{}
-	_ = json.Unmarshal(block.Header.ConsensusPayload, blkInfo) // already checked before
-	if blkInfo.NewChainConfig != nil {
-		var bookkeepers []keypair.PublicKey
-		for _, peer := range blkInfo.NewChainConfig.Peers {
-			keyBytes, _ := hex.DecodeString(peer.ID)
-			key, _ := keypair.DeserializePublicKey(keyBytes) // compressed
-			bookkeepers = append(bookkeepers, key)
-		}
-
-		nb, err := types.AddressFromBookkeepers(bookkeepers)
-		assert.Nil(t, err)
-		log.Println(nb.ToHexString())
+	neoTmv := &ToMerkleValue{
+		TxHash:      ethTmv.TxHash,
+		FromChainID: ethTmv.FromChainID,
+		TxParam: &CrossChainTxParameter{
+			TxHash:       ethTmv.MakeTxParam.TxHash,
+			CrossChainID: ethTmv.MakeTxParam.CrossChainID,
+			FromContract: ethTmv.MakeTxParam.FromContractAddress,
+			ToChainID:    ethTmv.MakeTxParam.ToChainID,
+			ToContract:   ethTmv.MakeTxParam.ToContractAddress,
+			Method:       []byte(ethTmv.MakeTxParam.Method),
+			Args:         ethTmv.MakeTxParam.Args,
+		},
 	}
+
+	rawNeoTmv, err := SerializeMerkleValue(neoTmv)
+	assert.Nil(t, err)
+	assert.Equal(t, "204ce9a62083b29dd888394c124fc57f0b8533171ed3f869dd350b0375d8027c00020000000000000020000000000000000000000000000000000000000000000000000000000000e269204df8f0fc252d2bd3f21c474510fed914cf5fb5ba98510ddfe83b3d6d5a3715ff14250e76987d838a75310c34bf422ea9f1ac4cc9060e0000000000000014cb569453781497dcb067b73d95b28802cb01553806756e6c6f636b4a149328aec1e84c93855e2fb4a01f5eb7ec15e1abd614e9cdc1efd22c74b5706f0068f79b69b46fa85a0d2035f50500000000000000000000000000000000000000000000000000000000",
+		helper.BytesToHex(rawNeoTmv))
+	// test deserialize
+
+	//neoTmv2, err := DeserializeMerkleValue(rawNeoTmv)
+	//assert.Nil(t, err)
+
 }
+
